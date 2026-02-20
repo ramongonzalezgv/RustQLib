@@ -1,0 +1,20 @@
+[package]
+name = "quantlib_engines"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+quantlib_core = { path = "../quantlib_core" }
+quantlib_models = { path = "../quantlib_models" }
+quantlib_products = { path = "../quantlib_products" }
+rayon = "1.10"
+num-complex = "0.4"
+rustfft = "6.2"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "fft_bench"
+harness = false

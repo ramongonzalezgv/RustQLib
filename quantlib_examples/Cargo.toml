@@ -1,0 +1,11 @@
+[package]
+name = "quantlib_examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+quantlib_core = { path = "../quantlib_core" }
+quantlib_models = { path = "../quantlib_models" }
+quantlib_products = { path = "../quantlib_products" }
+quantlib_engines = { path = "../quantlib_engines" }

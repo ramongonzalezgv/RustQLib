@@ -1,0 +1,9 @@
+[package]
+name = "quantlib_models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+quantlib_core = { path = "../quantlib_core" }
+num-complex = "0.4"

@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "quantlib_core",
+  "quantlib_models",
+  "quantlib_products",
+  "quantlib_engines",
+  "quantlib_greeks",
+  "quantlib_utils",
+  "quantlib_examples",
+  "quantlib_py",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"

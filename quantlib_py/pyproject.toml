@@ -1,0 +1,20 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "quantlib-py"
+version = "0.1.0"
+description = "Python bindings for QuantRustLib"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.22"]
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "quantlib_py"
+manifest-path = "Cargo.toml"

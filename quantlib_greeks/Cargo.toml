@@ -1,0 +1,8 @@
+[package]
+name = "quantlib_greeks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+quantlib_core = { path = "../quantlib_core" }

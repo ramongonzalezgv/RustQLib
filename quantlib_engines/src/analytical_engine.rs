@@ -1,0 +1,549 @@
+use quantlib_core::{OptionType, PricingEngine, QuantLibError};
+use quantlib_models::{BlackModel, BlackScholesModel, SabrModel};
+use quantlib_products::{
+    AmericanOption, AsianOption, DigitalOption, DigitalPayoffType, EuropeanOption,
+};
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnalyticalEngine;
+
+impl AnalyticalEngine {
+    fn intrinsic(option_type: OptionType, spot_or_forward: f64, strike: f64) -> f64 {
+        match option_type {
+            OptionType::Call => (spot_or_forward - strike).max(0.0),
+            OptionType::Put => (strike - spot_or_forward).max(0.0),
+        }
+    }
+
+    fn price_black_scholes(
+        &self,
+        product: &EuropeanOption,
+        model: &BlackScholesModel,
+    ) -> Result<f64, QuantLibError> {
+        let spot = product.require_spot()?;
+        let ttm = product.ttm();
+        if ttm <= 0.0 {
+            return Ok(Self::intrinsic(product.option_type, spot, product.k));
+        }
+
+        let d1 = model.d1(spot, product.k, ttm);
+        let d2 = model.d2(spot, product.k, ttm);
+
+        let discounted_spot = spot * (-(model.q) * ttm).exp();
+        let discounted_strike = product.k * (-(model.r) * ttm).exp();
+
+        let price = match product.option_type {
+            OptionType::Call => discounted_spot * norm_cdf(d1) - discounted_strike * norm_cdf(d2),
+            OptionType::Put => discounted_strike * norm_cdf(-d2) - discounted_spot * norm_cdf(-d1),
+        };
+
+        Ok(price)
+    }
+
+    fn price_black(
+        &self,
+        product: &EuropeanOption,
+        model: &BlackModel,
+    ) -> Result<f64, QuantLibError> {
+        let ttm = product.ttm();
+        let forward = product.require_forward()?;
+
+        if ttm <= 0.0 {
+            return Ok(Self::intrinsic(product.option_type, forward, product.k));
+        }
+
+        let d1 = model.d1(forward, product.k, ttm);
+        let d2 = model.d2(forward, product.k, ttm);
+        let discount = (-(model.r) * ttm).exp();
+
+        let price = match product.option_type {
+            OptionType::Call => discount * (forward * norm_cdf(d1) - product.k * norm_cdf(d2)),
+            OptionType::Put => discount * (product.k * norm_cdf(-d2) - forward * norm_cdf(-d1)),
+        };
+
+        Ok(price)
+    }
+
+    fn price_digital_black_scholes(
+        &self,
+        product: &DigitalOption,
+        model: &BlackScholesModel,
+    ) -> Result<f64, QuantLibError> {
+        let spot = product.require_spot()?;
+        let ttm = product.ttm();
+        if ttm <= 0.0 {
+            return Ok(product.unit_payoff_at_maturity(spot));
+        }
+
+        let strike = product.strike();
+        let d1 = model.d1(spot, strike, ttm);
+        let d2 = model.d2(spot, strike, ttm);
+        let discount = (-(model.r) * ttm).exp();
+        let discounted_spot = spot * (-(model.q) * ttm).exp();
+
+        let unit_price = match (product.payoff_type, product.option_type()) {
+            (DigitalPayoffType::CashOrNothing, OptionType::Call) => {
+                product.payout * discount * norm_cdf(d2)
+            }
+            (DigitalPayoffType::CashOrNothing, OptionType::Put) => {
+                product.payout * discount * norm_cdf(-d2)
+            }
+            (DigitalPayoffType::AssetOrNothing, OptionType::Call) => {
+                product.payout * discounted_spot * norm_cdf(d1)
+            }
+            (DigitalPayoffType::AssetOrNothing, OptionType::Put) => {
+                product.payout * discounted_spot * norm_cdf(-d1)
+            }
+        };
+
+        Ok(unit_price)
+    }
+
+    fn price_digital_black(
+        &self,
+        product: &DigitalOption,
+        model: &BlackModel,
+    ) -> Result<f64, QuantLibError> {
+        let forward = product.require_forward()?;
+        let ttm = product.ttm();
+        if ttm <= 0.0 {
+            return Ok(product.unit_payoff_at_maturity(forward));
+        }
+
+        let strike = product.strike();
+        let d1 = model.d1(forward, strike, ttm);
+        let d2 = model.d2(forward, strike, ttm);
+        let discount = (-(model.r) * ttm).exp();
+
+        let unit_price = match (product.payoff_type, product.option_type()) {
+            (DigitalPayoffType::CashOrNothing, OptionType::Call) => {
+                product.payout * discount * norm_cdf(d2)
+            }
+            (DigitalPayoffType::CashOrNothing, OptionType::Put) => {
+                product.payout * discount * norm_cdf(-d2)
+            }
+            (DigitalPayoffType::AssetOrNothing, OptionType::Call) => {
+                product.payout * discount * forward * norm_cdf(d1)
+            }
+            (DigitalPayoffType::AssetOrNothing, OptionType::Put) => {
+                product.payout * discount * forward * norm_cdf(-d1)
+            }
+        };
+
+        Ok(unit_price)
+    }
+
+    fn price_sabr(
+        &self,
+        product: &EuropeanOption,
+        model: &SabrModel,
+    ) -> Result<f64, QuantLibError> {
+        let ttm = product.ttm();
+        let forward = product.require_forward()?;
+
+        if ttm <= 0.0 {
+            return Ok(Self::intrinsic(product.option_type, forward, product.k));
+        }
+
+        let sigma = model.implied_volatility(forward, product.k, ttm)?;
+        let discount = (-(model.r()) * ttm).exp();
+
+        let unit_price = if model.beta().abs() < 1.0e-12 {
+            self.price_sabr_normal(
+                product.option_type,
+                forward,
+                product.k,
+                sigma,
+                discount,
+                ttm,
+            )
+        } else {
+            self.price_sabr_lognormal(
+                product.option_type,
+                forward,
+                product.k,
+                sigma,
+                discount,
+                ttm,
+            )
+        };
+
+        Ok(unit_price)
+    }
+
+    fn price_sabr_normal(
+        &self,
+        option_type: OptionType,
+        forward: f64,
+        strike: f64,
+        sigma: f64,
+        discount: f64,
+        ttm: f64,
+    ) -> f64 {
+        let vol_term = sigma * ttm.sqrt();
+        if vol_term <= 0.0 {
+            return discount * Self::intrinsic(option_type, forward, strike);
+        }
+
+        let d = (forward - strike) / vol_term;
+        let pdf = norm_pdf(d);
+        let cdf = norm_cdf(d);
+
+        match option_type {
+            OptionType::Call => discount * ((forward - strike) * cdf + vol_term * pdf),
+            OptionType::Put => discount * ((strike - forward) * norm_cdf(-d) + vol_term * pdf),
+        }
+    }
+
+    fn price_sabr_lognormal(
+        &self,
+        option_type: OptionType,
+        forward: f64,
+        strike: f64,
+        sigma: f64,
+        discount: f64,
+        ttm: f64,
+    ) -> f64 {
+        let vol_term = sigma * ttm.sqrt();
+        if vol_term <= 0.0 {
+            return discount * Self::intrinsic(option_type, forward, strike);
+        }
+
+        let d1 = ((forward / strike).ln() + 0.5 * sigma * sigma * ttm) / vol_term;
+        let d2 = d1 - vol_term;
+
+        match option_type {
+            OptionType::Call => discount * (forward * norm_cdf(d1) - strike * norm_cdf(d2)),
+            OptionType::Put => discount * (strike * norm_cdf(-d2) - forward * norm_cdf(-d1)),
+        }
+    }
+}
+
+impl PricingEngine<EuropeanOption, BlackScholesModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        product: &EuropeanOption,
+        model: &BlackScholesModel,
+    ) -> Result<f64, QuantLibError> {
+        product.validate()?;
+        model.validate()?;
+        let unit_price = self.price_black_scholes(product, model)?;
+        Ok(unit_price * f64::from(product.qty))
+    }
+}
+
+impl PricingEngine<EuropeanOption, BlackModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        product: &EuropeanOption,
+        model: &BlackModel,
+    ) -> Result<f64, QuantLibError> {
+        product.validate()?;
+        model.validate()?;
+        let unit_price = self.price_black(product, model)?;
+        Ok(unit_price * f64::from(product.qty))
+    }
+}
+
+impl PricingEngine<EuropeanOption, SabrModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        product: &EuropeanOption,
+        model: &SabrModel,
+    ) -> Result<f64, QuantLibError> {
+        product.validate()?;
+        model.validate()?;
+        let unit_price = self.price_sabr(product, model)?;
+        Ok(unit_price * f64::from(product.qty))
+    }
+}
+
+impl PricingEngine<DigitalOption, BlackScholesModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        product: &DigitalOption,
+        model: &BlackScholesModel,
+    ) -> Result<f64, QuantLibError> {
+        product.validate()?;
+        model.validate()?;
+        let unit_price = self.price_digital_black_scholes(product, model)?;
+        Ok(unit_price * f64::from(product.european.qty))
+    }
+}
+
+impl PricingEngine<DigitalOption, BlackModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        product: &DigitalOption,
+        model: &BlackModel,
+    ) -> Result<f64, QuantLibError> {
+        product.validate()?;
+        model.validate()?;
+        let unit_price = self.price_digital_black(product, model)?;
+        Ok(unit_price * f64::from(product.european.qty))
+    }
+}
+
+impl PricingEngine<DigitalOption, SabrModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        _product: &DigitalOption,
+        _model: &SabrModel,
+    ) -> Result<f64, QuantLibError> {
+        Err(QuantLibError::Engine(
+            "analytical engine does not support DigitalOption under SABRModel".to_owned(),
+        ))
+    }
+}
+
+impl PricingEngine<AmericanOption, BlackScholesModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        _product: &AmericanOption,
+        _model: &BlackScholesModel,
+    ) -> Result<f64, QuantLibError> {
+        Err(QuantLibError::Engine(
+            "analytical engine does not support AmericanOption under BlackScholesModel".to_owned(),
+        ))
+    }
+}
+
+impl PricingEngine<AsianOption, BlackScholesModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        _product: &AsianOption,
+        _model: &BlackScholesModel,
+    ) -> Result<f64, QuantLibError> {
+        Err(QuantLibError::Engine(
+            "analytical engine does not support AsianOption under BlackScholesModel".to_owned(),
+        ))
+    }
+}
+
+impl PricingEngine<AmericanOption, BlackModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        _product: &AmericanOption,
+        _model: &BlackModel,
+    ) -> Result<f64, QuantLibError> {
+        Err(QuantLibError::Engine(
+            "analytical engine does not support AmericanOption under BlackModel".to_owned(),
+        ))
+    }
+}
+
+impl PricingEngine<AsianOption, BlackModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        _product: &AsianOption,
+        _model: &BlackModel,
+    ) -> Result<f64, QuantLibError> {
+        Err(QuantLibError::Engine(
+            "analytical engine does not support AsianOption under BlackModel".to_owned(),
+        ))
+    }
+}
+
+impl PricingEngine<AmericanOption, SabrModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        _product: &AmericanOption,
+        _model: &SabrModel,
+    ) -> Result<f64, QuantLibError> {
+        Err(QuantLibError::Engine(
+            "analytical engine does not support AmericanOption under SABRModel".to_owned(),
+        ))
+    }
+}
+
+impl PricingEngine<AsianOption, SabrModel> for AnalyticalEngine {
+    fn calculate_price(
+        &self,
+        _product: &AsianOption,
+        _model: &SabrModel,
+    ) -> Result<f64, QuantLibError> {
+        Err(QuantLibError::Engine(
+            "analytical engine does not support AsianOption under SABRModel".to_owned(),
+        ))
+    }
+}
+
+fn norm_cdf(x: f64) -> f64 {
+    // Uses system libm erf for high-precision parity with Python's math.erf/scipy CDF.
+    0.5 * (1.0 + libm_erf(x / std::f64::consts::SQRT_2))
+}
+
+fn norm_pdf(x: f64) -> f64 {
+    (-0.5 * x * x).exp() / (2.0 * std::f64::consts::PI).sqrt()
+}
+
+fn libm_erf(x: f64) -> f64 {
+    #[link(name = "m")]
+    unsafe extern "C" {
+        fn erf(x: f64) -> f64;
+    }
+
+    // SAFETY: Calling a pure libm function with a finite f64 input.
+    unsafe { erf(x) }
+}
+
+#[cfg(test)]
+mod tests {
+    use quantlib_core::{OptionType, PricingEngine, SimpleDate};
+    use quantlib_models::{BlackModel, BlackScholesModel, SabrModel};
+    use quantlib_products::{
+        AmericanOption, AsianOption, AveragingType, DigitalOption, DigitalPayoffType,
+    };
+
+    use super::{AnalyticalEngine, norm_cdf};
+
+    #[test]
+    fn cdf_is_reasonable() {
+        assert!((norm_cdf(0.0) - 0.5).abs() < 1.0e-8);
+        assert!((norm_cdf(1.0) - 0.841_344_746).abs() < 1.0e-7);
+    }
+
+    #[test]
+    fn analytical_prices_cash_digital_bs() {
+        let option = DigitalOption::new_spot(
+            100.0,
+            95.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Call,
+            3,
+            12.5,
+            DigitalPayoffType::CashOrNothing,
+            None,
+        )
+        .expect("option");
+        let model = BlackScholesModel::new(0.25, 0.03, 0.01).expect("model");
+        let engine = AnalyticalEngine;
+
+        let ttm = option.ttm();
+        let d2 = model.d2(option.require_spot().expect("spot"), option.strike(), ttm);
+        let expected_unit = option.payout * (-model.r * ttm).exp() * norm_cdf(d2);
+        let expected = expected_unit * 3.0;
+
+        let price = engine.calculate_price(&option, &model).expect("price");
+        assert!((price - expected).abs() < 1.0e-10);
+    }
+
+    #[test]
+    fn analytical_prices_asset_digital_black() {
+        let option = DigitalOption::new_forward(
+            101.0,
+            100.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Put,
+            2,
+            1.2,
+            DigitalPayoffType::AssetOrNothing,
+            None,
+        )
+        .expect("option");
+        let model = BlackModel::new(0.2, 0.01).expect("model");
+        let engine = AnalyticalEngine;
+
+        let ttm = option.ttm();
+        let forward = option.require_forward().expect("forward");
+        let d1 = model.d1(forward, option.strike(), ttm);
+        let expected_unit = option.payout * (-model.r * ttm).exp() * forward * norm_cdf(-d1);
+        let expected = expected_unit * 2.0;
+
+        let price = engine.calculate_price(&option, &model).expect("price");
+        assert!((price - expected).abs() < 1.0e-10);
+    }
+
+    #[test]
+    fn analytical_black_requires_forward() {
+        let option = quantlib_products::EuropeanOption::new_spot(
+            100.0,
+            100.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Call,
+            1,
+            None,
+        )
+        .expect("valid product");
+
+        let model = BlackModel::new(0.2, 0.01).expect("model");
+        let engine = AnalyticalEngine;
+        let err = engine
+            .calculate_price(&option, &model)
+            .expect_err("must fail without forward");
+        assert!(err.to_string().contains("forward-based pricing requested"));
+    }
+
+    #[test]
+    fn analytical_sabr_prices_european_option() {
+        let option = quantlib_products::EuropeanOption::new_forward(
+            101.0,
+            100.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Call,
+            1,
+            None,
+        )
+        .expect("valid product");
+
+        let model = SabrModel::normal(0.2, -0.2, 0.5, 0.01, None).expect("model");
+        let engine = AnalyticalEngine;
+        let price = engine
+            .calculate_price(&option, &model)
+            .expect("SABR analytical price");
+        assert!(price.is_finite() && price > 0.0);
+    }
+
+    #[test]
+    fn analytical_engine_rejects_american_option() {
+        let option = AmericanOption::new_spot(
+            100.0,
+            100.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Call,
+            1,
+            None,
+        )
+        .expect("valid product");
+        let model = BlackScholesModel::new(0.2, 0.01, 0.0).expect("valid model");
+        let engine = AnalyticalEngine;
+
+        let err = engine
+            .calculate_price(&option, &model)
+            .expect_err("must reject");
+        assert!(
+            err.to_string().contains("does not support AmericanOption"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn analytical_engine_rejects_asian_option() {
+        let option = AsianOption::new(
+            100.0,
+            100.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Call,
+            1,
+            AveragingType::Arithmetic,
+            None,
+        )
+        .expect("valid product");
+        let model = BlackScholesModel::new(0.2, 0.01, 0.0).expect("valid model");
+        let engine = AnalyticalEngine;
+
+        let err = engine
+            .calculate_price(&option, &model)
+            .expect_err("must reject");
+        assert!(
+            err.to_string().contains("does not support AsianOption"),
+            "unexpected error: {err}"
+        );
+    }
+}
