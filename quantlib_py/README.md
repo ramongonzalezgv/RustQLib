@@ -29,6 +29,15 @@ Run from repo root with your virtualenv active:
 python -m unittest discover -s quantlib_py/tests -p "test_parallelization.py" -v
 ```
 
+## Run Python Calibration Tests
+
+Calibration API coverage for Black, Black-Scholes, SABR, and Heston lives in:
+`quantlib_py/tests/test_calibration_bindings.py`.
+
+```bash
+python -m unittest discover -s quantlib_py/tests -p "test_calibration_bindings.py" -v
+```
+
 ## Recent Additions
 
 ### Bates Model
@@ -195,6 +204,23 @@ Object-oriented API for advanced use cases:
   
 - **`MonteCarloEngine`**: Path simulation-based pricing
   - Methods: `price_european_*`, `price_digital_*`, `price_asian_*`
+
+### Calibration APIs
+
+Model calibration functions with flexible optimizer/objective controls:
+
+- `calibrate_black(...)`
+- `calibrate_black_scholes(...)`
+- `calibrate_sabr(...)`
+- `calibrate_heston(...)`
+
+All calibration functions return a dictionary with:
+
+- `success`, `message`, `iterations`
+- `objective_value`, `rmse`, `mape`, `max_error`
+- `calibrated_params`
+- `errors`, `market_values`, `model_values`
+- `model` (calibrated model parameter dict)
 
 ## NumPy API technical details
 

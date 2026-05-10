@@ -60,6 +60,53 @@ def show_numpy(label: str, arr: np.ndarray) -> None:
     print(f"  values={arr}")
 
 
+def show_calibration_result(label: str, result: dict) -> None:
+    subsection(label)
+    show("success", result["success"])
+    show("message", result["message"])
+    show("iterations", result["iterations"])
+    show("objective_value", result["objective_value"])
+    show("rmse", result["rmse"])
+    show("mape", result["mape"])
+    show("max_error", result["max_error"])
+    show("calibrated model", result["model"])
+
+
+def sabr_hagan_implied_vol(forward: float, strike: float, maturity: float, alpha: float, beta: float, rho: float, nu: float) -> float:
+    """
+    Hagan-style SABR approximation used only to generate synthetic calibration targets.
+    This keeps the walkthrough self-contained.
+    """
+    if abs(forward - strike) < 1.0e-10:
+        fk_power = forward ** (1.0 - beta)
+        correction = (
+            (((1.0 - beta) ** 2) / 24.0) * (alpha * alpha) / (fk_power * fk_power)
+            + rho * beta * nu * alpha / (4.0 * fk_power)
+            + (2.0 - 3.0 * rho * rho) * nu * nu / 24.0
+        ) * maturity
+        return alpha / fk_power * (1.0 + correction)
+
+    z = (nu / alpha) * ((forward * strike) ** ((1.0 - beta) / 2.0)) * np.log(forward / strike)
+    discriminant = max(0.0, 1.0 - 2.0 * rho * z + z * z)
+    numerator = np.sqrt(discriminant) + z - rho
+    denominator = 1.0 - rho
+    chi_z = np.log(numerator / denominator) if numerator > 0.0 and abs(denominator) > 1.0e-12 else z
+
+    if abs(chi_z) < 1.0e-12:
+        return alpha
+
+    fk_power = (forward * strike) ** ((1.0 - beta) / 2.0)
+    log_fk = np.log(forward / strike)
+    main_term = alpha / fk_power * z / chi_z
+    term1 = (
+        (((1.0 - beta) ** 2) / 24.0) * (alpha * alpha) / (fk_power * fk_power)
+        + rho * beta * nu * alpha / (4.0 * fk_power)
+        + (2.0 - 3.0 * rho * rho) * nu * nu / 24.0
+    ) * maturity
+    term2 = ((1.0 - beta) ** 2) * log_fk * log_fk / 24.0 + ((1.0 - beta) ** 4) * (log_fk**4) / 1920.0
+    return main_term * (1.0 + term1 + term2)
+
+
 def main() -> None:
     np.set_printoptions(precision=8, suppress=True)
 
@@ -1000,7 +1047,222 @@ def main() -> None:
     for api_name, values in numpy_results.items():
         show_numpy(api_name, values)
 
-    section("5) Optional validation demo: error message on mismatched input lengths")
+    section("5) Calibration APIs (parameter fitting)")
+    # This section creates synthetic market data and then recovers model parameters.
+    # In production, replace synthetic market values with real market quotes.
+
+    subsection("5.1 Black calibration from option prices")
+    black_forwards = []
+    black_strikes = []
+    black_maturities = []
+    black_is_call = []
+    black_market_values = []
+
+    for maturity in [0.25, 0.5, 1.0]:
+        expiry_date = (np.datetime64(valuation_date) + np.timedelta64(int(round(maturity * 365)), "D")).astype(str)
+        for strike in [90.0, 100.0, 110.0]:
+            for call in [True, False]:
+                black_forwards.append(100.0)
+                black_strikes.append(strike)
+                black_maturities.append(maturity)
+                black_is_call.append(call)
+                black_market_values.append(
+                    ql.price_european_analytical_black(
+                        forward=100.0,
+                        strike=strike,
+                        expiry_date=expiry_date,
+                        option_type="call" if call else "put",
+                        qty=1,
+                        sigma=sigma_black,
+                        r=r_black,
+                        valuation_date=valuation_date,
+                    )
+                )
+
+    black_calib = ql.calibrate_black(
+        forwards=black_forwards,
+        strikes=black_strikes,
+        maturities=black_maturities,
+        is_call=black_is_call,
+        market_values=black_market_values,
+        target="price",
+        initial_sigma=0.15,
+        initial_r=0.01,
+        method="hybrid",
+        objective="least_squares",
+        max_generations=120,
+        population_size=36,
+        nm_max_iterations=180,
+        tolerance=1.0e-6,
+        seed=7,
+    )
+    show_calibration_result("Black calibration result", black_calib)
+
+    subsection("5.2 Black-Scholes calibration from option prices")
+    bs_spots = []
+    bs_strikes = []
+    bs_maturities = []
+    bs_is_call = []
+    bs_market_values = []
+
+    for maturity in [0.25, 0.5, 1.0]:
+        expiry_date = (np.datetime64(valuation_date) + np.timedelta64(int(round(maturity * 365)), "D")).astype(str)
+        for strike in [90.0, 100.0, 110.0]:
+            for call in [True, False]:
+                bs_spots.append(100.0)
+                bs_strikes.append(strike)
+                bs_maturities.append(maturity)
+                bs_is_call.append(call)
+                bs_market_values.append(
+                    ql.price_european_analytical_bs(
+                        spot=100.0,
+                        strike=strike,
+                        expiry_date=expiry_date,
+                        option_type="call" if call else "put",
+                        qty=1,
+                        sigma=sigma_bs,
+                        r=r_bs,
+                        q=q_bs,
+                        valuation_date=valuation_date,
+                    )
+                )
+
+    bs_calib = ql.calibrate_black_scholes(
+        spots=bs_spots,
+        strikes=bs_strikes,
+        maturities=bs_maturities,
+        is_call=bs_is_call,
+        market_values=bs_market_values,
+        target="price",
+        initial_sigma=0.15,
+        initial_r=0.00,
+        initial_q=0.00,
+        method="hybrid",
+        objective="least_squares",
+        max_generations=140,
+        population_size=40,
+        nm_max_iterations=200,
+        tolerance=1.0e-6,
+        seed=11,
+    )
+    show_calibration_result("Black-Scholes calibration result", bs_calib)
+
+    subsection("5.3 SABR calibration from implied volatilities")
+    sabr_alpha = 0.35
+    sabr_beta = 0.60
+    sabr_rho = -0.30
+    sabr_nu = 0.80
+    sabr_forward = 100.0
+
+    sabr_forwards = []
+    sabr_strikes = []
+    sabr_maturities = []
+    sabr_market_vols = []
+
+    for maturity in [0.5, 1.0, 2.0]:
+        for strike in [80.0, 90.0, 100.0, 110.0, 120.0]:
+            sabr_forwards.append(sabr_forward)
+            sabr_strikes.append(strike)
+            sabr_maturities.append(maturity)
+            sabr_market_vols.append(
+                sabr_hagan_implied_vol(
+                    forward=sabr_forward,
+                    strike=strike,
+                    maturity=maturity,
+                    alpha=sabr_alpha,
+                    beta=sabr_beta,
+                    rho=sabr_rho,
+                    nu=sabr_nu,
+                )
+            )
+
+    sabr_calib = ql.calibrate_sabr(
+        forwards=sabr_forwards,
+        strikes=sabr_strikes,
+        maturities=sabr_maturities,
+        market_vols=sabr_market_vols,
+        r=0.01,
+        initial_alpha=0.20,
+        initial_beta=0.60,
+        initial_rho=-0.10,
+        initial_nu=0.50,
+        beta_bounds=(0.60, 0.60),  # fixing beta is common in practice
+        method="hybrid",
+        objective="relative_least_squares",
+        max_generations=180,
+        population_size=42,
+        nm_max_iterations=220,
+        tolerance=1.0e-6,
+        seed=19,
+    )
+    show_calibration_result("SABR calibration result", sabr_calib)
+
+    subsection("5.4 Heston calibration from FFT-priced market surface")
+    # We use a compact quote set and fix a few parameters to keep runtime low in a walkthrough.
+    heston_spots = []
+    heston_strikes = []
+    heston_maturities = []
+    heston_is_call = []
+    heston_market_prices = []
+
+    for maturity in [0.5, 1.0]:
+        expiry_date = (np.datetime64(valuation_date) + np.timedelta64(int(round(maturity * 365)), "D")).astype(str)
+        for strike in [90.0, 100.0, 110.0]:
+            for call in [True, False]:
+                heston_spots.append(100.0)
+                heston_strikes.append(strike)
+                heston_maturities.append(maturity)
+                heston_is_call.append(call)
+                heston_market_prices.append(
+                    ql.price_european_fft_heston(
+                        spot=100.0,
+                        strike=strike,
+                        expiry_date=expiry_date,
+                        option_type="call" if call else "put",
+                        qty=1,
+                        kappa=kappa,
+                        theta=theta,
+                        sigma=sigma_heston,
+                        rho=rho,
+                        v0=v0,
+                        r=r_heston,
+                        q=q_heston,
+                        n=512,
+                        b=120.0,
+                        interp="cubic",
+                        valuation_date=valuation_date,
+                    )
+                )
+
+    heston_calib = ql.calibrate_heston(
+        spots=heston_spots,
+        strikes=heston_strikes,
+        maturities=heston_maturities,
+        is_call=heston_is_call,
+        market_prices=heston_market_prices,
+        initial_kappa=kappa,
+        initial_theta=theta,
+        initial_sigma=0.70,
+        initial_rho=-0.20,
+        initial_v0=0.08,
+        initial_r=r_heston,
+        initial_q=q_heston,
+        kappa_bounds=(kappa, kappa),  # fixed here for a faster/stable demo
+        theta_bounds=(theta, theta),  # fixed here for a faster/stable demo
+        r_bounds=(r_heston, r_heston),
+        q_bounds=(q_heston, q_heston),
+        method="nelder_mead",
+        objective="least_squares",
+        fft_n=512,
+        fft_b=120.0,
+        fft_interp="cubic",
+        nm_max_iterations=140,
+        tolerance=1.0e-6,
+        seed=23,
+    )
+    show_calibration_result("Heston calibration result", heston_calib)
+
+    section("6) Optional validation demo: error message on mismatched input lengths")
     try:
         # Intentionally broken: strikes has length 3 while spots has length 4.
         # This demonstrates the explicit validation error users should expect.

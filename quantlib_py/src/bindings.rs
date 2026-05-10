@@ -13,6 +13,7 @@ use quantlib_models::{BatesModel, BlackModel, BlackScholesModel, HestonModel, Ko
 use quantlib_products::{
     AsianOption, AveragingType, DigitalOption, DigitalPayoffType, EuropeanOption,
 };
+use quantlib_utils::{CalibrationMethod, CalibrationTarget, ObjectiveKind};
 
 pub(crate) fn to_py_err(error: QuantLibError) -> PyErr {
     match error {
@@ -43,6 +44,49 @@ pub(crate) fn parse_date(value: &str) -> PyResult<SimpleDate> {
 
 pub(crate) fn parse_fft_interpolation(value: &str) -> PyResult<InterpolationKind> {
     value.parse::<InterpolationKind>().map_err(to_py_err)
+}
+
+pub(crate) fn parse_calibration_method(value: &str) -> PyResult<CalibrationMethod> {
+    match value.to_ascii_lowercase().as_str() {
+        "hybrid" | "hybrid_global_local" => Ok(CalibrationMethod::HybridGlobalLocal),
+        "differential_evolution" | "de" => Ok(CalibrationMethod::DifferentialEvolution),
+        "nelder_mead" | "nm" => Ok(CalibrationMethod::NelderMead),
+        _ => Err(PyValueError::new_err(
+            "method must be one of: 'hybrid', 'differential_evolution', 'nelder_mead'",
+        )),
+    }
+}
+
+pub(crate) fn parse_calibration_target(value: &str) -> PyResult<CalibrationTarget> {
+    match value.to_ascii_lowercase().as_str() {
+        "price" => Ok(CalibrationTarget::Price),
+        "volatility" | "vol" => Ok(CalibrationTarget::Volatility),
+        _ => Err(PyValueError::new_err(
+            "target must be one of: 'price', 'volatility'",
+        )),
+    }
+}
+
+pub(crate) fn parse_calibration_objective(
+    value: &str,
+    huber_delta: Option<f64>,
+) -> PyResult<ObjectiveKind> {
+    match value.to_ascii_lowercase().as_str() {
+        "least_squares" | "lsq" => Ok(ObjectiveKind::LeastSquares),
+        "relative_least_squares" | "relative" => Ok(ObjectiveKind::RelativeLeastSquares),
+        "huber" => {
+            let delta = huber_delta.unwrap_or(1.0e-3);
+            if !delta.is_finite() || delta <= 0.0 {
+                return Err(PyValueError::new_err(
+                    "huber_delta must be finite and positive",
+                ));
+            }
+            Ok(ObjectiveKind::Huber { delta })
+        }
+        _ => Err(PyValueError::new_err(
+            "objective must be one of: 'least_squares', 'relative_least_squares', 'huber'",
+        )),
+    }
 }
 
 pub(crate) fn require_contiguous<'py, T: numpy::Element>(

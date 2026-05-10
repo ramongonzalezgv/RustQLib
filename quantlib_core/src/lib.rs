@@ -7,7 +7,7 @@ pub mod traits;
 pub mod valuation;
 
 pub use calendar::{ActualCalendar, MarketCalendar, WeekdayCalendar};
-pub use dataclasses::{CalibrationResult, MarketQuote};
+pub use dataclasses::CalibrationResult;
 pub use error::QuantLibError;
 pub use option_type::OptionType;
 pub use simple_date::SimpleDate;

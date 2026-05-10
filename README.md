@@ -16,7 +16,7 @@ This repository also includes **Python bindings** (`quantlib_py`) for high-throu
 - [`quantlib_models`](./quantlib_models/README.md): models (Black(-Scholes), Heston, SABR, Bates, Kou)
 - [`quantlib_engines`](./quantlib_engines/README.md): pricing engines (Analytical, Binomial, Monte Carlo, FFT) + batch helpers
 - [`quantlib_greeks`](./quantlib_greeks/README.md): Greeks (currently scaffold)
-- [`quantlib_utils`](./quantlib_utils/README.md): utilities (currently scaffold)
+- [`quantlib_utils`](./quantlib_utils/README.md): utilities (calibration engines, objective functions, model calibrators)
 - [`quantlib_examples`](./quantlib_examples/README.md): small runnable examples
 - [`quantlib_py`](./quantlib_py/README.md): PyO3 bindings (functions + OO “engine” classes) and notebooks
 
@@ -104,9 +104,21 @@ This is useful when you price many instruments repeatedly and want simple cachin
 - **FFT**: characteristic-function pricing for European options under several models (Black-Scholes, Black-forward, Heston, Bates, Kou)
 - **Binomial**: included as an engine module (see `quantlib_engines`)
 
+## Calibration (high level)
+
+- `quantlib_utils` includes bounded calibration engines:
+  - Differential Evolution (global)
+  - Nelder-Mead (local)
+  - Hybrid global-local refinement
+- Model-specific calibrators are available for:
+  - Black
+  - Black-Scholes
+  - SABR
+  - Heston (FFT-priced objective)
+- Results include parameter estimates and fit diagnostics (`rmse`, `mape`, residual vectors).
+
 For exact coverage and constraints, see the engine docs: [`quantlib_engines`](./quantlib_engines/README.md).
 
 ## License
 
 MIT. See workspace `Cargo.toml` (`license = "MIT"`).
-

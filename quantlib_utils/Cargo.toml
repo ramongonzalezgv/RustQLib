@@ -6,3 +6,9 @@ license.workspace = true
 
 [dependencies]
 quantlib_core = { path = "../quantlib_core" }
+quantlib_models = { path = "../quantlib_models" }
+quantlib_products = { path = "../quantlib_products" }
+quantlib_engines = { path = "../quantlib_engines" }
+rand = "0.9"
+rand_chacha = "0.9"
+rayon = "1.10"

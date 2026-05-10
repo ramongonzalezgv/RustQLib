@@ -21,7 +21,7 @@ This crate is intentionally lightweight: it defines the **traits and common type
   - `QuantLibError`: validation/date parse/serialization/engine errors
 - **Enums & dataclasses**
   - `OptionType` (`Call`/`Put`)
-  - `MarketQuote`, `CalibrationResult`
+  - `CalibrationResult`
 
 The crate re-exports these key symbols from its root, so most users can:
 
@@ -97,4 +97,3 @@ Run only core tests:
 ```bash
 cargo test -p quantlib_core
 ```
-
