@@ -1,8 +1,37 @@
+use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use quantlib_core::QuantLibError;
 
 pub(crate) const DEFAULT_PATH_CHUNK_SIZE: usize = 4_096;
+
+/// Discretization of the Heston variance process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HestonScheme {
+    /// Euler with full truncation (Lord, Koekkoek & van Dijk, 2010): the
+    /// variance is never floored, only its positive part enters drift and
+    /// diffusion. Needs fine time steps.
+    FullTruncation,
+    /// Andersen (2008) quadratic-exponential scheme with martingale
+    /// correction. Low bias even with 10–30 steps per year.
+    #[default]
+    QuadraticExponential,
+}
+
+impl FromStr for HestonScheme {
+    type Err = QuantLibError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "full_truncation" | "ft" => Ok(Self::FullTruncation),
+            "quadratic_exponential" | "qe" => Ok(Self::QuadraticExponential),
+            _ => Err(QuantLibError::Validation(
+                "heston_scheme must be 'qe' (quadratic_exponential) or 'full_truncation'"
+                    .to_owned(),
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct MonteCarloConfig {
@@ -11,6 +40,7 @@ pub struct MonteCarloConfig {
     pub seed: Option<u64>,
     pub parallel: bool,
     pub chunk_size: usize,
+    pub heston_scheme: HestonScheme,
 }
 
 impl Default for MonteCarloConfig {
@@ -21,6 +51,7 @@ impl Default for MonteCarloConfig {
             seed: None,
             parallel: true,
             chunk_size: DEFAULT_PATH_CHUNK_SIZE,
+            heston_scheme: HestonScheme::default(),
         }
     }
 }
@@ -33,6 +64,7 @@ impl MonteCarloConfig {
             seed,
             parallel: true,
             chunk_size: DEFAULT_PATH_CHUNK_SIZE,
+            heston_scheme: HestonScheme::default(),
         };
         config.validate()?;
         Ok(config)
@@ -45,6 +77,11 @@ impl MonteCarloConfig {
 
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
         self.chunk_size = chunk_size.max(1);
+        self
+    }
+
+    pub fn with_heston_scheme(mut self, heston_scheme: HestonScheme) -> Self {
+        self.heston_scheme = heston_scheme;
         self
     }
 

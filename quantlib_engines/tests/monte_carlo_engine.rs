@@ -2,7 +2,7 @@ mod common;
 
 use common::{mean_and_stderr, spot_option};
 use quantlib_core::{OptionType, PricingEngine};
-use quantlib_engines::{AnalyticalEngine, FFTEngine, MonteCarloEngine};
+use quantlib_engines::{AnalyticalEngine, CosEngine, FFTEngine, HestonScheme, MonteCarloEngine};
 use quantlib_models::{BlackScholesModel, HestonModel};
 use quantlib_products::EuropeanOption;
 
@@ -19,15 +19,50 @@ fn mc_estimate<M>(
 where
     MonteCarloEngine: PricingEngine<EuropeanOption, M>,
 {
+    mc_estimate_with(
+        option,
+        model,
+        n_paths,
+        n_steps,
+        n_seeds,
+        HestonScheme::default(),
+    )
+}
+
+fn mc_estimate_with<M>(
+    option: &EuropeanOption,
+    model: &M,
+    n_paths: usize,
+    n_steps: usize,
+    n_seeds: u64,
+    scheme: HestonScheme,
+) -> (f64, f64)
+where
+    MonteCarloEngine: PricingEngine<EuropeanOption, M>,
+{
     let prices: Vec<f64> = (1..=n_seeds)
         .map(|seed| {
             MonteCarloEngine::new(n_paths, n_steps, Some(seed))
                 .unwrap()
+                .with_heston_scheme(scheme)
                 .calculate_price(option, model)
                 .unwrap()
         })
         .collect();
     mean_and_stderr(&prices)
+}
+
+/// Lord et al. / Andersen test case: 2κθ = 0.12 < σ² = 1, so the variance
+/// spends a lot of time near zero and naive Euler schemes are badly biased.
+fn feller_violating_heston() -> HestonModel {
+    HestonModel::new(1.5, 0.04, 1.0, -0.9, 0.04, 0.02, 0.0).expect("model")
+}
+
+fn fourier_reference(option: &EuropeanOption, model: &HestonModel) -> f64 {
+    CosEngine::new(1024, 16.0)
+        .unwrap()
+        .calculate_price(option, model)
+        .unwrap()
 }
 
 #[test]
@@ -50,9 +85,6 @@ fn black_scholes_mc_within_three_stderr_of_analytic() {
 
 #[test]
 fn heston_mc_within_three_stderr_of_fourier() {
-    // Feller condition holds (2*kappa*theta > sigma^2), so the variance
-    // flooring in the Euler scheme rarely triggers and its bias (#6) stays
-    // well below the statistical error at this path count.
     let model = HestonModel::new(2.0, 0.04, 0.3, -0.7, 0.04, 0.03, 0.0).expect("model");
     let fft = FFTEngine::default();
     for (k, option_type) in [(100.0, OptionType::Call), (90.0, OptionType::Put)] {
@@ -114,5 +146,86 @@ fn sampled_paths_have_expected_shape_and_terminal_mean() {
         paths
             .iter()
             .all(|p| p.len() == 51 && p.iter().all(|s| *s > 0.0))
+    );
+}
+
+#[test]
+fn heston_qe_is_unbiased_with_coarse_steps_when_feller_fails() {
+    let model = feller_violating_heston();
+    let option = spot_option(100.0, 100.0, 365, OptionType::Call);
+    let reference = fourier_reference(&option, &model);
+
+    // 500k paths, 32 steps per year.
+    let (mc, stderr) = mc_estimate_with(
+        &option,
+        &model,
+        25_000,
+        32,
+        20,
+        HestonScheme::QuadraticExponential,
+    );
+    assert!(
+        (mc - reference).abs() < 3.0 * stderr,
+        "qe={mc}, fourier={reference}, stderr={stderr}"
+    );
+}
+
+#[test]
+fn heston_full_truncation_bias_shrinks_with_steps_when_feller_fails() {
+    let model = feller_violating_heston();
+    let option = spot_option(100.0, 100.0, 365, OptionType::Call);
+    let reference = fourier_reference(&option, &model);
+
+    // 200k paths per step count. Bias is +0.74 / +0.11 / +0.01 against a
+    // standard error of ~0.016, so the ordering is unambiguous.
+    let biases: Vec<(usize, f64, f64)> = [12, 52, 252]
+        .into_iter()
+        .map(|steps| {
+            let (mc, stderr) = mc_estimate_with(
+                &option,
+                &model,
+                20_000,
+                steps,
+                10,
+                HestonScheme::FullTruncation,
+            );
+            (steps, mc - reference, stderr)
+        })
+        .collect();
+
+    for pair in biases.windows(2) {
+        assert!(
+            pair[1].1.abs() < pair[0].1.abs(),
+            "bias must shrink with steps: {biases:?}"
+        );
+    }
+    let (_, bias, stderr) = biases[2];
+    assert!(
+        bias.abs() < 3.0 * stderr,
+        "252 steps: bias={bias}, stderr={stderr}, all={biases:?}"
+    );
+}
+
+#[test]
+fn heston_qe_terminal_spot_is_a_martingale() {
+    // A call struck near zero pays S_T - K, so its price checks
+    // E[S_T]·e^{-rT} = S_0·e^{-qT} - K·e^{-rT} under the QE scheme.
+    let model = feller_violating_heston();
+    let strike = 1.0e-6;
+    let option = spot_option(100.0, strike, 365, OptionType::Call);
+    let ttm = option.ttm();
+    let expected = 100.0 * (-model.q * ttm).exp() - strike * (-model.r * ttm).exp();
+
+    let (mc, stderr) = mc_estimate_with(
+        &option,
+        &model,
+        25_000,
+        32,
+        20,
+        HestonScheme::QuadraticExponential,
+    );
+    assert!(
+        (mc - expected).abs() < 3.0 * stderr,
+        "forward={mc}, expected={expected}, stderr={stderr}"
     );
 }

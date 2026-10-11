@@ -206,6 +206,7 @@ Object-oriented API for advanced use cases:
   - Methods: same as `FFTEngine`
   
 - **`MonteCarloEngine`**: Path simulation-based pricing
+  - `heston_scheme="qe"` (default, Andersen QE) or `"full_truncation"` for Heston paths
   - Methods: `price_european_*`, `price_digital_*`, `price_asian_*`
 
 ### Calibration APIs

@@ -6,8 +6,9 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use quantlib_core::{OptionType, PricingEngine, QuantLibError, SimpleDate};
 use quantlib_engines::{
-    AnalyticalEngine, CosEngine as RustCosEngine, FFTEngine as RustFFTEngine, InterpolationKind,
-    MonteCarloEngine, calculate_prices_parallel, calculate_prices_parallel_per_model,
+    AnalyticalEngine, CosEngine as RustCosEngine, FFTEngine as RustFFTEngine, HestonScheme,
+    InterpolationKind, MonteCarloEngine, calculate_prices_parallel,
+    calculate_prices_parallel_per_model,
 };
 use quantlib_models::{BatesModel, BlackModel, BlackScholesModel, HestonModel, KouModel};
 use quantlib_products::{
@@ -44,6 +45,16 @@ pub(crate) fn parse_date(value: &str) -> PyResult<SimpleDate> {
 
 pub(crate) fn parse_fft_interpolation(value: &str) -> PyResult<InterpolationKind> {
     value.parse::<InterpolationKind>().map_err(to_py_err)
+}
+
+/// Default Heston Monte Carlo scheme for the Python API.
+pub(crate) const DEFAULT_HESTON_SCHEME: &str = "qe";
+
+fn heston_scheme_name(scheme: HestonScheme) -> &'static str {
+    match scheme {
+        HestonScheme::QuadraticExponential => "qe",
+        HestonScheme::FullTruncation => "full_truncation",
+    }
 }
 
 pub(crate) fn parse_calibration_method(value: &str) -> PyResult<CalibrationMethod> {
@@ -1586,18 +1597,21 @@ pub(crate) struct PyMonteCarloEngine {
 #[pymethods]
 impl PyMonteCarloEngine {
     #[new]
-    #[pyo3(signature = (n_paths = 10_000, n_steps = 252, seed = None, parallel = true, chunk_size = 4_096))]
+    #[pyo3(signature = (n_paths = 10_000, n_steps = 252, seed = None, parallel = true, chunk_size = 4_096, heston_scheme = DEFAULT_HESTON_SCHEME))]
     pub(crate) fn new(
         n_paths: usize,
         n_steps: usize,
         seed: Option<u64>,
         parallel: bool,
         chunk_size: usize,
+        heston_scheme: &str,
     ) -> PyResult<Self> {
+        let heston_scheme = heston_scheme.parse::<HestonScheme>().map_err(to_py_err)?;
         let inner = MonteCarloEngine::new(n_paths, n_steps, seed)
             .map_err(to_py_err)?
             .with_parallel(parallel)
-            .with_chunk_size(chunk_size);
+            .with_chunk_size(chunk_size)
+            .with_heston_scheme(heston_scheme);
 
         Ok(Self { inner })
     }
@@ -1625,6 +1639,11 @@ impl PyMonteCarloEngine {
     #[getter]
     fn chunk_size(&self) -> usize {
         self.inner.chunk_size
+    }
+
+    #[getter]
+    fn heston_scheme(&self) -> &'static str {
+        heston_scheme_name(self.inner.heston_scheme)
     }
 
     fn price_european_bs(
@@ -1833,12 +1852,13 @@ impl PyMonteCarloEngine {
 
     fn __repr__(&self) -> String {
         format!(
-            "MonteCarloEngine(n_paths={}, n_steps={}, seed={:?}, parallel={}, chunk_size={})",
+            "MonteCarloEngine(n_paths={}, n_steps={}, seed={:?}, parallel={}, chunk_size={}, heston_scheme='{}')",
             self.inner.n_paths,
             self.inner.n_steps,
             self.inner.seed,
             self.inner.parallel,
-            self.inner.chunk_size
+            self.inner.chunk_size,
+            self.heston_scheme()
         )
     }
 }

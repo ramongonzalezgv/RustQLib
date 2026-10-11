@@ -12,6 +12,6 @@ pub use binomial_engine::{BinomialEngine, BinomialLevels};
 pub use cos_engine::CosEngine;
 pub use fft_engine::{FFTEngine, InterpolationKind};
 pub use monte_carlo_engine::{
-    MonteCarloAsianEngine, MonteCarloConfig, MonteCarloDigitalEngine, MonteCarloEngine,
-    MonteCarloEuropeanEngine,
+    HestonScheme, MonteCarloAsianEngine, MonteCarloConfig, MonteCarloDigitalEngine,
+    MonteCarloEngine, MonteCarloEuropeanEngine,
 };

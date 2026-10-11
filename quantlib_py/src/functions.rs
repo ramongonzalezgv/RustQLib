@@ -16,9 +16,9 @@ use quantlib_utils::{
 };
 
 use crate::bindings::{
-    PyAsianOptionSpot, PyBatesModel, PyBlackModel, PyBlackScholesModel, PyDigitalOptionForward,
-    PyDigitalOptionSpot, PyEuropeanOptionForward, PyEuropeanOptionSpot, PyHestonModel, PyKouModel,
-    PyMonteCarloEngine, parse_averaging_type, parse_calibration_method,
+    DEFAULT_HESTON_SCHEME, PyAsianOptionSpot, PyBatesModel, PyBlackModel, PyBlackScholesModel,
+    PyDigitalOptionForward, PyDigitalOptionSpot, PyEuropeanOptionForward, PyEuropeanOptionSpot,
+    PyHestonModel, PyKouModel, PyMonteCarloEngine, parse_averaging_type, parse_calibration_method,
     parse_calibration_objective, parse_calibration_target, parse_date, parse_fft_interpolation,
     price_products_per_model, price_products_single_model, require_contiguous, to_py_err,
 };
@@ -596,7 +596,14 @@ fn price_digital_monte_carlo_bs(
         payoff_type,
     )?;
     let model = PyBlackScholesModel::new(sigma, r, q)?;
-    let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
+    let engine = PyMonteCarloEngine::new(
+        n_paths,
+        n_steps,
+        seed,
+        parallel,
+        chunk_size,
+        DEFAULT_HESTON_SCHEME,
+    )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
@@ -639,7 +646,14 @@ fn price_digital_monte_carlo_heston(
         payoff_type,
     )?;
     let model = PyHestonModel::new(kappa, theta, sigma, rho, v0, r, q)?;
-    let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
+    let engine = PyMonteCarloEngine::new(
+        n_paths,
+        n_steps,
+        seed,
+        parallel,
+        chunk_size,
+        DEFAULT_HESTON_SCHEME,
+    )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
@@ -668,7 +682,14 @@ fn price_european_monte_carlo_bs(
     let option =
         PyEuropeanOptionSpot::new(spot, strike, expiry_date, valuation_date, option_type, qty)?;
     let model = PyBlackScholesModel::new(sigma, r, q)?;
-    let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
+    let engine = PyMonteCarloEngine::new(
+        n_paths,
+        n_steps,
+        seed,
+        parallel,
+        chunk_size,
+        DEFAULT_HESTON_SCHEME,
+    )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
@@ -701,7 +722,14 @@ fn price_european_monte_carlo_heston(
     let option =
         PyEuropeanOptionSpot::new(spot, strike, expiry_date, valuation_date, option_type, qty)?;
     let model = PyHestonModel::new(kappa, theta, sigma, rho, v0, r, q)?;
-    let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
+    let engine = PyMonteCarloEngine::new(
+        n_paths,
+        n_steps,
+        seed,
+        parallel,
+        chunk_size,
+        DEFAULT_HESTON_SCHEME,
+    )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
@@ -1240,7 +1268,14 @@ fn price_asian_monte_carlo_bs(
         averaging_type,
     )?;
     let model = PyBlackScholesModel::new(sigma, r, q)?;
-    let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
+    let engine = PyMonteCarloEngine::new(
+        n_paths,
+        n_steps,
+        seed,
+        parallel,
+        chunk_size,
+        DEFAULT_HESTON_SCHEME,
+    )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
@@ -1281,7 +1316,14 @@ fn price_asian_monte_carlo_heston(
         averaging_type,
     )?;
     let model = PyHestonModel::new(kappa, theta, sigma, rho, v0, r, q)?;
-    let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
+    let engine = PyMonteCarloEngine::new(
+        n_paths,
+        n_steps,
+        seed,
+        parallel,
+        chunk_size,
+        DEFAULT_HESTON_SCHEME,
+    )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
