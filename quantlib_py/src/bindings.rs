@@ -7,7 +7,7 @@ use pyo3::types::PyModule;
 use quantlib_core::{OptionType, PricingEngine, QuantLibError, SimpleDate};
 use quantlib_engines::{
     AnalyticalEngine, CosEngine as RustCosEngine, FFTEngine as RustFFTEngine, HestonScheme,
-    InterpolationKind, MonteCarloEngine, calculate_prices_parallel,
+    InterpolationKind, McEstimate, MonteCarloEngine, calculate_prices_parallel,
     calculate_prices_parallel_per_model,
 };
 use quantlib_models::{BatesModel, BlackModel, BlackScholesModel, HestonModel, KouModel};
@@ -1588,6 +1588,43 @@ impl PyCosEngine {
     }
 }
 
+/// Monte Carlo price with its standard error.
+#[pyclass(
+    module = "quantlib_py",
+    name = "McEstimate",
+    frozen,
+    skip_from_py_object
+)]
+#[derive(Clone, Copy)]
+pub(crate) struct PyMcEstimate {
+    #[pyo3(get)]
+    price: f64,
+    #[pyo3(get)]
+    std_error: f64,
+    #[pyo3(get)]
+    n_paths: usize,
+}
+
+impl From<McEstimate> for PyMcEstimate {
+    fn from(estimate: McEstimate) -> Self {
+        Self {
+            price: estimate.price,
+            std_error: estimate.std_error,
+            n_paths: estimate.n_paths,
+        }
+    }
+}
+
+#[pymethods]
+impl PyMcEstimate {
+    fn __repr__(&self) -> String {
+        format!(
+            "McEstimate(price={}, std_error={}, n_paths={})",
+            self.price, self.std_error, self.n_paths
+        )
+    }
+}
+
 #[pyclass(module = "quantlib_py", name = "MonteCarloEngine", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyMonteCarloEngine {
@@ -1597,7 +1634,8 @@ pub(crate) struct PyMonteCarloEngine {
 #[pymethods]
 impl PyMonteCarloEngine {
     #[new]
-    #[pyo3(signature = (n_paths = 10_000, n_steps = 252, seed = None, parallel = true, chunk_size = 4_096, heston_scheme = DEFAULT_HESTON_SCHEME))]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (n_paths = 10_000, n_steps = 252, seed = None, parallel = true, chunk_size = 4_096, heston_scheme = DEFAULT_HESTON_SCHEME, antithetic = false, control_variate = false))]
     pub(crate) fn new(
         n_paths: usize,
         n_steps: usize,
@@ -1605,45 +1643,155 @@ impl PyMonteCarloEngine {
         parallel: bool,
         chunk_size: usize,
         heston_scheme: &str,
+        antithetic: bool,
+        control_variate: bool,
     ) -> PyResult<Self> {
         let heston_scheme = heston_scheme.parse::<HestonScheme>().map_err(to_py_err)?;
         let inner = MonteCarloEngine::new(n_paths, n_steps, seed)
             .map_err(to_py_err)?
             .with_parallel(parallel)
             .with_chunk_size(chunk_size)
-            .with_heston_scheme(heston_scheme);
+            .with_heston_scheme(heston_scheme)
+            .with_antithetic(antithetic)
+            .with_control_variate(control_variate);
 
         Ok(Self { inner })
     }
 
     #[getter]
     fn n_paths(&self) -> usize {
-        self.inner.n_paths
+        self.inner.config.n_paths
     }
 
     #[getter]
     fn n_steps(&self) -> usize {
-        self.inner.n_steps
+        self.inner.config.n_steps
     }
 
     #[getter]
     fn seed(&self) -> Option<u64> {
-        self.inner.seed
+        self.inner.config.seed
     }
 
     #[getter]
     fn parallel(&self) -> bool {
-        self.inner.parallel
+        self.inner.config.parallel
     }
 
     #[getter]
     fn chunk_size(&self) -> usize {
-        self.inner.chunk_size
+        self.inner.config.chunk_size
     }
 
     #[getter]
     fn heston_scheme(&self) -> &'static str {
-        heston_scheme_name(self.inner.heston_scheme)
+        heston_scheme_name(self.inner.config.heston_scheme)
+    }
+
+    #[getter]
+    fn antithetic(&self) -> bool {
+        self.inner.config.antithetic
+    }
+
+    #[getter]
+    fn control_variate(&self) -> bool {
+        self.inner.config.control_variate
+    }
+
+    /// Price, standard error and path count.
+    fn price_european_bs_with_stats(
+        &self,
+        py: Python<'_>,
+        option: &PyEuropeanOptionSpot,
+        model: &PyBlackScholesModel,
+    ) -> PyResult<PyMcEstimate> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner;
+
+        py.detach(move || engine.price_with_stats(&option, &model))
+            .map(PyMcEstimate::from)
+            .map_err(to_py_err)
+    }
+
+    /// Price, standard error and path count.
+    fn price_european_heston_with_stats(
+        &self,
+        py: Python<'_>,
+        option: &PyEuropeanOptionSpot,
+        model: &PyHestonModel,
+    ) -> PyResult<PyMcEstimate> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner;
+
+        py.detach(move || engine.price_with_stats(&option, &model))
+            .map(PyMcEstimate::from)
+            .map_err(to_py_err)
+    }
+
+    /// Price, standard error and path count.
+    fn price_digital_bs_with_stats(
+        &self,
+        py: Python<'_>,
+        option: &PyDigitalOptionSpot,
+        model: &PyBlackScholesModel,
+    ) -> PyResult<PyMcEstimate> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner;
+
+        py.detach(move || engine.price_with_stats(&option, &model))
+            .map(PyMcEstimate::from)
+            .map_err(to_py_err)
+    }
+
+    /// Price, standard error and path count.
+    fn price_digital_heston_with_stats(
+        &self,
+        py: Python<'_>,
+        option: &PyDigitalOptionSpot,
+        model: &PyHestonModel,
+    ) -> PyResult<PyMcEstimate> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner;
+
+        py.detach(move || engine.price_with_stats(&option, &model))
+            .map(PyMcEstimate::from)
+            .map_err(to_py_err)
+    }
+
+    /// Price, standard error and path count.
+    fn price_asian_bs_with_stats(
+        &self,
+        py: Python<'_>,
+        option: &PyAsianOptionSpot,
+        model: &PyBlackScholesModel,
+    ) -> PyResult<PyMcEstimate> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner;
+
+        py.detach(move || engine.price_with_stats(&option, &model))
+            .map(PyMcEstimate::from)
+            .map_err(to_py_err)
+    }
+
+    /// Price, standard error and path count.
+    fn price_asian_heston_with_stats(
+        &self,
+        py: Python<'_>,
+        option: &PyAsianOptionSpot,
+        model: &PyHestonModel,
+    ) -> PyResult<PyMcEstimate> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner;
+
+        py.detach(move || engine.price_with_stats(&option, &model))
+            .map(PyMcEstimate::from)
+            .map_err(to_py_err)
     }
 
     fn price_european_bs(
@@ -1852,13 +2000,15 @@ impl PyMonteCarloEngine {
 
     fn __repr__(&self) -> String {
         format!(
-            "MonteCarloEngine(n_paths={}, n_steps={}, seed={:?}, parallel={}, chunk_size={}, heston_scheme='{}')",
-            self.inner.n_paths,
-            self.inner.n_steps,
-            self.inner.seed,
-            self.inner.parallel,
-            self.inner.chunk_size,
-            self.heston_scheme()
+            "MonteCarloEngine(n_paths={}, n_steps={}, seed={:?}, parallel={}, chunk_size={}, heston_scheme='{}', antithetic={}, control_variate={})",
+            self.inner.config.n_paths,
+            self.inner.config.n_steps,
+            self.inner.config.seed,
+            self.inner.config.parallel,
+            self.inner.config.chunk_size,
+            self.heston_scheme(),
+            self.inner.config.antithetic,
+            self.inner.config.control_variate
         )
     }
 }
@@ -1877,6 +2027,7 @@ pub(crate) fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAnalyticalEngine>()?;
     m.add_class::<PyFFTEngine>()?;
     m.add_class::<PyCosEngine>()?;
+    m.add_class::<PyMcEstimate>()?;
     m.add_class::<PyMonteCarloEngine>()?;
     Ok(())
 }

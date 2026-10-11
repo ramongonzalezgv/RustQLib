@@ -26,11 +26,18 @@ Engines implement `quantlib_core::PricingEngine<P, M>` for supported combination
   - Fang–Oosterlee COS pricing for the same models; `CosEngine { n: 256, l: 12.0 }` by default
   - Best for single strikes or short strike lists (about 14× faster than the 4096-point FFT for
     one Heston price); also has `price_strip`
-- **`MonteCarloEngine`**
-  - A facade that delegates to specialized engines:
-    - `MonteCarloEuropeanEngine`
-    - `MonteCarloAsianEngine`
-    - `MonteCarloDigitalEngine`
+- **`MonteCarloEngine`** (`MonteCarloEngine { config: MonteCarloConfig }`)
+  - `price_with_stats(&product, &model)` returns `McEstimate { price, std_error, n_paths }`;
+    `calculate_price` returns its `price`
+  - Payoffs are streamed (terminal value, running arithmetic/geometric averages); paths are
+    never stored, so memory does not grow with `n_paths`
+  - Each `chunk_size` block of paths has its own Xoshiro256++ stream, so seeded results are
+    bit-identical serially, in parallel and for any thread count
+  - Variance reduction (opt-in): `with_antithetic(true)`; `with_control_variate(true)` uses the
+    terminal spot for European/digital options, the geometric Asian (closed form) for arithmetic
+    Asians under Black–Scholes, and the arithmetic average of the spot otherwise
+  - `sample_paths_black_scholes` / `sample_paths_heston` return full paths (`SimulatedPaths`)
+    for plotting
   - Supports:
     - `EuropeanOption`, `DigitalOption`, `AsianOption` under `BlackScholesModel`
     - `EuropeanOption`, `DigitalOption`, `AsianOption` under `HestonModel`
@@ -38,6 +45,9 @@ Engines implement `quantlib_core::PricingEngine<P, M>` for supported combination
     - `QuadraticExponential` (default): Andersen (2008) QE with martingale correction, low bias
       even at 10–30 steps per year
     - `FullTruncation`: Euler with full truncation (Lord et al. 2010); needs fine steps
+- **`geometric_asian_black_scholes`**: closed-form geometric Asian under Black–Scholes (discrete
+  fixings or continuous monitoring); `AnalyticalEngine` prices continuously monitored geometric
+  `AsianOption`s with it
 - **`BinomialEngine`**
   - Tree-based engine module (see exported types)
 - **Batch helpers**
@@ -135,8 +145,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_parallel(true)
         .with_chunk_size(4_096);
 
-    let price = engine.calculate_price(&option, &model)?;
-    println!("price={price}");
+    let estimate = engine.with_antithetic(true).price_with_stats(&option, &model)?;
+    println!("price={} ± {}", estimate.price, estimate.std_error);
     Ok(())
 }
 ```
@@ -150,7 +160,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Engines call `require_spot()` / `require_forward()` to enforce this.
 - **Monte Carlo reproducibility**:
   - Provide `seed: Some(u64)` to get deterministic results.
-  - Parallel mode is designed to match serial results for seeded runs.
+  - Seeded results do not depend on `parallel` or the number of threads, only on the seed and
+    `chunk_size`.
 - **FFT domain**:
   - FFT pricing may error if `log_moneyness` is outside the interpolation domain.
 

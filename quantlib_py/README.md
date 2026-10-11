@@ -207,7 +207,10 @@ Object-oriented API for advanced use cases:
   
 - **`MonteCarloEngine`**: Path simulation-based pricing
   - `heston_scheme="qe"` (default, Andersen QE) or `"full_truncation"` for Heston paths
-  - Methods: `price_european_*`, `price_digital_*`, `price_asian_*`
+  - `antithetic=True`, `control_variate=True` for variance reduction
+  - Methods: `price_european_*`, `price_digital_*`, `price_asian_*`, plus `*_with_stats`
+    variants (e.g. `price_asian_bs_with_stats`) returning an `McEstimate` with `price`,
+    `std_error` and `n_paths`
 
 ### Calibration APIs
 

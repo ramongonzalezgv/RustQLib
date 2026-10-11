@@ -441,9 +441,6 @@ pub fn ttm(req: &PricingRequest) -> ApiResult<f64> {
 // Pricing
 // ---------------------------------------------------------------------------
 
-/// Number of independent batches used to estimate the MC standard error.
-const MC_BATCHES: u64 = 8;
-
 /// Prices the request with one engine.
 pub fn price(req: &PricingRequest, engine: EngineKind) -> ApiResult<Quote> {
     price_at(req, engine, req.market.underlying)
@@ -565,52 +562,41 @@ fn asian(req: &PricingRequest, underlying: f64) -> ApiResult<AsianOption> {
     .map_err(err)
 }
 
-/// Monte Carlo with the paths split into `MC_BATCHES` independently seeded
-/// batches; the spread of the batch means gives the standard error.
+/// Monte Carlo price with the engine's standard error.
 fn monte_carlo(req: &PricingRequest, model: &Model, underlying: f64) -> ApiResult<Quote> {
     let s = &req.settings;
-    let batch_paths = (s.mc_paths as u64 / MC_BATCHES).max(1) as usize;
-    let product = req.product.kind;
+    // wasm32 has no threads: keep the engine serial everywhere. Results do not
+    // depend on threading anyway, so native and WASM agree for the same seed.
+    let engine = MonteCarloEngine::new(s.mc_paths, s.mc_steps, Some(s.mc_seed))
+        .map_err(err)?
+        .with_parallel(false);
 
-    let mut estimates = Vec::with_capacity(MC_BATCHES as usize);
-    for batch in 0..MC_BATCHES {
-        // wasm32 has no threads: keep the engine serial everywhere so native
-        // and WASM results are identical for the same seed.
-        let engine =
-            MonteCarloEngine::new(batch_paths, s.mc_steps, Some(s.mc_seed.wrapping_add(batch)))
-                .map_err(err)?
-                .with_parallel(false);
-
-        let price = match (product, model) {
-            (ProductKind::European, Model::BlackScholes(m)) => {
-                engine.calculate_price(&european(req, underlying, req.product.strike)?, m)
-            }
-            (ProductKind::European, Model::Heston(m)) => {
-                engine.calculate_price(&european(req, underlying, req.product.strike)?, m)
-            }
-            (ProductKind::Digital, Model::BlackScholes(m)) => {
-                engine.calculate_price(&digital(req, underlying)?, m)
-            }
-            (ProductKind::Digital, Model::Heston(m)) => {
-                engine.calculate_price(&digital(req, underlying)?, m)
-            }
-            (ProductKind::Asian, Model::BlackScholes(m)) => {
-                engine.calculate_price(&asian(req, underlying)?, m)
-            }
-            (ProductKind::Asian, Model::Heston(m)) => {
-                engine.calculate_price(&asian(req, underlying)?, m)
-            }
-            _ => unreachable!("filtered by supports()"),
-        };
-        estimates.push(price.map_err(err)?);
+    let estimate = match (req.product.kind, model) {
+        (ProductKind::European, Model::BlackScholes(m)) => {
+            engine.price_with_stats(&european(req, underlying, req.product.strike)?, m)
+        }
+        (ProductKind::European, Model::Heston(m)) => {
+            engine.price_with_stats(&european(req, underlying, req.product.strike)?, m)
+        }
+        (ProductKind::Digital, Model::BlackScholes(m)) => {
+            engine.price_with_stats(&digital(req, underlying)?, m)
+        }
+        (ProductKind::Digital, Model::Heston(m)) => {
+            engine.price_with_stats(&digital(req, underlying)?, m)
+        }
+        (ProductKind::Asian, Model::BlackScholes(m)) => {
+            engine.price_with_stats(&asian(req, underlying)?, m)
+        }
+        (ProductKind::Asian, Model::Heston(m)) => {
+            engine.price_with_stats(&asian(req, underlying)?, m)
+        }
+        _ => unreachable!("filtered by supports()"),
     }
+    .map_err(err)?;
 
-    let n = estimates.len() as f64;
-    let mean = estimates.iter().sum::<f64>() / n;
-    let var = estimates.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / (n - 1.0);
     Ok(Quote {
-        price: mean,
-        stderr: Some((var / n).sqrt()),
+        price: estimate.price,
+        stderr: Some(estimate.std_error),
     })
 }
 
@@ -780,7 +766,7 @@ pub fn mc_paths(req: &PricingRequest, n_display: usize) -> ApiResult<PathSample>
     let mut quantiles: Vec<Vec<f64>> = (0..5).map(|_| Vec::with_capacity(n_steps + 1)).collect();
     let mut column = vec![0.0; paths.len()];
     for step in 0..=n_steps {
-        for (c, p) in column.iter_mut().zip(&paths) {
+        for (c, p) in column.iter_mut().zip(paths.iter()) {
             *c = p[step];
         }
         column.sort_by(f64::total_cmp);
@@ -814,7 +800,12 @@ pub fn mc_paths(req: &PricingRequest, n_display: usize) -> ApiResult<PathSample>
     });
 
     let stride = (paths.len() / n_display.max(1)).max(1);
-    let display = paths.into_iter().step_by(stride).take(n_display).collect();
+    let display = paths
+        .iter()
+        .step_by(stride)
+        .take(n_display)
+        .map(<[f64]>::to_vec)
+        .collect();
 
     Ok(PathSample {
         times,

@@ -49,5 +49,5 @@ fn engines_match_native() {
 const NATIVE_REFERENCE: [(EngineKind, f64); 3] = [
     (EngineKind::Fft, 10.450_583_572_186_233),
     (EngineKind::Binomial, 10.446_585_136_446_54),
-    (EngineKind::MonteCarlo, 10.439_996_756_657_877),
+    (EngineKind::MonteCarlo, 10.437_035_752_423_261),
 ];

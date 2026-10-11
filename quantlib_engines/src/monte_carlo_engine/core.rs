@@ -2,6 +2,8 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use quantlib_core::QuantLibError;
+use rand::SeedableRng;
+use rand_xoshiro::Xoshiro256PlusPlus;
 
 pub(crate) const DEFAULT_PATH_CHUNK_SIZE: usize = 4_096;
 
@@ -39,8 +41,14 @@ pub struct MonteCarloConfig {
     pub n_steps: usize,
     pub seed: Option<u64>,
     pub parallel: bool,
+    /// Paths per independent random stream (and per parallel task). Results
+    /// depend on it, but not on the number of threads.
     pub chunk_size: usize,
     pub heston_scheme: HestonScheme,
+    /// Pair every normal vector `Z` with `−Z`; each pair is one sample.
+    pub antithetic: bool,
+    /// Use the product's control variate (see [`super::MonteCarloEngine`]).
+    pub control_variate: bool,
 }
 
 impl Default for MonteCarloConfig {
@@ -52,6 +60,8 @@ impl Default for MonteCarloConfig {
             parallel: true,
             chunk_size: DEFAULT_PATH_CHUNK_SIZE,
             heston_scheme: HestonScheme::default(),
+            antithetic: false,
+            control_variate: false,
         }
     }
 }
@@ -62,27 +72,10 @@ impl MonteCarloConfig {
             n_paths,
             n_steps,
             seed,
-            parallel: true,
-            chunk_size: DEFAULT_PATH_CHUNK_SIZE,
-            heston_scheme: HestonScheme::default(),
+            ..Self::default()
         };
         config.validate()?;
         Ok(config)
-    }
-
-    pub fn with_parallel(mut self, parallel: bool) -> Self {
-        self.parallel = parallel;
-        self
-    }
-
-    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
-        self.chunk_size = chunk_size.max(1);
-        self
-    }
-
-    pub fn with_heston_scheme(mut self, heston_scheme: HestonScheme) -> Self {
-        self.heston_scheme = heston_scheme;
-        self
     }
 
     pub fn validate(&self) -> Result<(), QuantLibError> {
@@ -100,98 +93,180 @@ impl MonteCarloConfig {
         Ok(())
     }
 
-    pub(crate) fn rng(&self) -> NormalRng {
-        let seed = self.seed.unwrap_or_else(default_seed);
-        NormalRng::new(seed)
+    /// Independent samples: paths, or antithetic pairs of paths.
+    pub(crate) fn n_samples(&self) -> usize {
+        if self.antithetic {
+            self.n_paths.div_ceil(2)
+        } else {
+            self.n_paths
+        }
+    }
+
+    /// Paths actually simulated (an odd antithetic count is rounded up).
+    pub(crate) fn simulated_paths(&self) -> usize {
+        if self.antithetic {
+            2 * self.n_samples()
+        } else {
+            self.n_paths
+        }
+    }
+
+    pub(crate) fn resolved_seed(&self) -> u64 {
+        self.seed.unwrap_or_else(default_seed)
     }
 }
 
-pub(crate) fn discount_and_average(
-    payoffs: &[f64],
-    rate: f64,
-    ttm: f64,
-) -> Result<f64, QuantLibError> {
-    if payoffs.is_empty() {
-        return Err(QuantLibError::Engine(
-            "empty payoff vector in MonteCarloEngine".to_owned(),
-        ));
+/// The random stream of chunk `chunk`: Xoshiro256++ seeded from a SplitMix64
+/// mix of `(seed, chunk)`, so chunks are independent and reproducible
+/// whatever thread runs them.
+pub(crate) fn chunk_rng(seed: u64, chunk: usize) -> Xoshiro256PlusPlus {
+    Xoshiro256PlusPlus::seed_from_u64(splitmix64(seed ^ splitmix64(chunk as u64)))
+}
+
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+
+/// Monte Carlo price with its standard error.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct McEstimate {
+    pub price: f64,
+    /// Standard error of `price` (NaN with fewer than two samples).
+    pub std_error: f64,
+    /// Paths simulated (both legs of antithetic pairs count).
+    pub n_paths: usize,
+}
+
+/// One sample: the payoff `y` and the control variate `x`, both undiscounted.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Sample {
+    pub y: f64,
+    pub x: f64,
+}
+
+impl Sample {
+    pub(crate) fn mean(self, other: Self) -> Self {
+        Self {
+            y: 0.5 * (self.y + other.y),
+            x: 0.5 * (self.x + other.x),
+        }
+    }
+}
+
+/// Means and (co)moments of `(y, x)`, mergeable across chunks (Chan et al.).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Moments {
+    n: f64,
+    mean_y: f64,
+    mean_x: f64,
+    m2_y: f64,
+    m2_x: f64,
+    c_xy: f64,
+}
+
+/// Division-free accumulator for one chunk: sums of `(y, x)` shifted by the
+/// chunk's first sample, which keeps the sums of squares well conditioned.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ChunkSums {
+    n: f64,
+    shift: Sample,
+    sum_y: f64,
+    sum_x: f64,
+    sum_yy: f64,
+    sum_xx: f64,
+    sum_xy: f64,
+}
+
+impl ChunkSums {
+    #[inline]
+    pub(crate) fn push(&mut self, sample: Sample) {
+        if self.n == 0.0 {
+            self.shift = sample;
+        }
+        let (dy, dx) = (sample.y - self.shift.y, sample.x - self.shift.x);
+        self.n += 1.0;
+        self.sum_y += dy;
+        self.sum_x += dx;
+        self.sum_yy += dy * dy;
+        self.sum_xx += dx * dx;
+        self.sum_xy += dy * dx;
     }
 
-    let mean = payoffs.iter().sum::<f64>() / payoffs.len() as f64;
-    Ok((-rate * ttm).exp() * mean)
+    pub(crate) fn moments(&self) -> Moments {
+        if self.n == 0.0 {
+            return Moments::default();
+        }
+        let (mean_dy, mean_dx) = (self.sum_y / self.n, self.sum_x / self.n);
+        Moments {
+            n: self.n,
+            mean_y: self.shift.y + mean_dy,
+            mean_x: self.shift.x + mean_dx,
+            m2_y: (self.sum_yy - self.sum_y * mean_dy).max(0.0),
+            m2_x: (self.sum_xx - self.sum_x * mean_dx).max(0.0),
+            c_xy: self.sum_xy - self.sum_y * mean_dx,
+        }
+    }
+}
+
+impl Moments {
+    pub(crate) fn merge(self, other: Self) -> Self {
+        if self.n == 0.0 {
+            return other;
+        }
+        if other.n == 0.0 {
+            return self;
+        }
+        let n = self.n + other.n;
+        let dy = other.mean_y - self.mean_y;
+        let dx = other.mean_x - self.mean_x;
+        let weight = self.n * other.n / n;
+        Self {
+            n,
+            mean_y: self.mean_y + dy * other.n / n,
+            mean_x: self.mean_x + dx * other.n / n,
+            m2_y: self.m2_y + other.m2_y + dy * dy * weight,
+            m2_x: self.m2_x + other.m2_x + dx * dx * weight,
+            c_xy: self.c_xy + other.c_xy + dy * dx * weight,
+        }
+    }
+
+    /// Discounted mean and standard error, with the control variate applied
+    /// when its expectation is given: `ȳ − β(x̄ − E[X])`, `β = Cov(y, x)/Var(x)`.
+    pub(crate) fn estimate(
+        &self,
+        discount: f64,
+        control_mean: Option<f64>,
+        n_paths: usize,
+    ) -> McEstimate {
+        let (mean, m2) = match control_mean {
+            Some(expected) if self.m2_x > 0.0 => {
+                let beta = self.c_xy / self.m2_x;
+                (
+                    self.mean_y - beta * (self.mean_x - expected),
+                    (self.m2_y - beta * self.c_xy).max(0.0),
+                )
+            }
+            _ => (self.mean_y, self.m2_y.max(0.0)),
+        };
+        let std_error = if self.n >= 2.0 {
+            (m2 / (self.n - 1.0) / self.n).sqrt()
+        } else {
+            f64::NAN
+        };
+        McEstimate {
+            price: discount * mean,
+            std_error: discount * std_error,
+            n_paths,
+        }
+    }
 }
 
 fn default_seed() -> u64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => duration.as_nanos() as u64,
         Err(err) => err.duration().as_nanos() as u64,
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct XorShift64 {
-    state: u64,
-}
-
-impl XorShift64 {
-    fn new(seed: u64) -> Self {
-        let adjusted = if seed == 0 {
-            0x9e37_79b9_7f4a_7c15
-        } else {
-            seed
-        };
-        Self { state: adjusted }
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x >> 12;
-        x ^= x << 25;
-        x ^= x >> 27;
-        self.state = x;
-        x.wrapping_mul(0x2545_F491_4F6C_DD1D)
-    }
-
-    fn next_f64_open01(&mut self) -> f64 {
-        let mut u = (self.next_u64() as f64) / ((u64::MAX as f64) + 1.0);
-        if u <= f64::EPSILON {
-            u = f64::EPSILON;
-        }
-        if u >= 1.0 {
-            u = 1.0 - f64::EPSILON;
-        }
-        u
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct NormalRng {
-    uniform: XorShift64,
-    spare: Option<f64>,
-}
-
-impl NormalRng {
-    pub(crate) fn new(seed: u64) -> Self {
-        Self {
-            uniform: XorShift64::new(seed),
-            spare: None,
-        }
-    }
-
-    pub(crate) fn standard_normal(&mut self) -> f64 {
-        if let Some(z) = self.spare.take() {
-            return z;
-        }
-
-        let u1 = self.uniform.next_f64_open01();
-        let u2 = self.uniform.next_f64_open01();
-
-        let radius = (-2.0 * u1.ln()).sqrt();
-        let theta = 2.0 * std::f64::consts::PI * u2;
-
-        let z0 = radius * theta.cos();
-        let z1 = radius * theta.sin();
-        self.spare = Some(z1);
-        z0
     }
 }
