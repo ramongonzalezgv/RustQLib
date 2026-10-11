@@ -247,11 +247,6 @@ function renderNotice(): void {
     const models = MODELS.filter((m) => enginesFor(req.product.kind, m.kind).length > 0).map((m) => m.label);
     notices.push(`No RustQLib engine prices ${product} options under ${modelMeta(req.model.kind).label}. Available models: ${models.join(", ")}.`);
   }
-  if (req.model.kind === "sabr") {
-    notices.push(
-      `SABR uses Hagan's implied-vol formulas, which have known errors in this version (<a href="https://github.com/ramongonzalezgv/RustQLib/issues/1" target="_blank" rel="noopener">#1</a>). Treat SABR prices as indicative.`,
-    );
-  }
   const el = $("notice");
   el.hidden = notices.length === 0;
   el.innerHTML = notices.join("<br />");
