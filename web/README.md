@@ -43,6 +43,6 @@ native ones.
 
 ## Deploy
 
-`.github/workflows/pages.yml` publishes `dist/` to GitHub Pages. It runs on
-demand (`workflow_dispatch`); enable Pages with source "GitHub Actions" in the
-repository settings first.
+`.github/workflows/pages.yml` builds and publishes `dist/` to GitHub Pages on
+every push to `main` (and on demand via `workflow_dispatch`):
+<https://ramongonzalezgv.github.io/RustQLib/>
