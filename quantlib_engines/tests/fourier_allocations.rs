@@ -1,11 +1,11 @@
 //! Heap-allocation counts of the Fourier engines' pricing paths.
 //!
 //! Lives in its own test binary because it installs a counting global
-//! allocator; tests run serially through a lock so counts do not mix.
+//! allocator. Counts are per thread, so allocations made concurrently by the
+//! test harness or other tests do not leak into a measurement.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 use quantlib_core::{OptionType, PricingEngine, SimpleDate};
 use quantlib_engines::{CosEngine, FFTEngine, InterpolationKind};
@@ -14,12 +14,18 @@ use quantlib_products::EuropeanOption;
 
 struct CountingAllocator;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
-static SERIAL: Mutex<()> = Mutex::new(());
+thread_local! {
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn allocations() -> usize {
+    ALLOCATIONS.with(Cell::get)
+}
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        // `try_with` because the thread-local may already be gone during thread teardown.
+        let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
         unsafe { System.alloc(layout) }
     }
 
@@ -32,9 +38,9 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static GLOBAL: CountingAllocator = CountingAllocator;
 
 fn count_allocations<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     let value = f();
-    (value, ALLOCATIONS.load(Ordering::Relaxed) - before)
+    (value, allocations() - before)
 }
 
 fn heston() -> HestonModel {
@@ -58,9 +64,6 @@ fn option() -> EuropeanOption {
 
 #[test]
 fn fft_price_allocates_a_constant_handful_of_buffers() {
-    let _guard = SERIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (model, option) = (heston(), option());
 
     for interp in [InterpolationKind::Linear, InterpolationKind::Cubic] {
@@ -86,9 +89,6 @@ fn fft_price_allocates_a_constant_handful_of_buffers() {
 
 #[test]
 fn cos_price_allocates_a_constant_handful_of_buffers() {
-    let _guard = SERIAL
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (model, option) = (heston(), option());
     let engine = CosEngine::default();
     engine.calculate_price(&option, &model).expect("warm-up");
