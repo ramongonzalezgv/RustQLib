@@ -511,7 +511,22 @@ $("share").addEventListener("click", async () => {
   }
 });
 
-window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+darkQuery.addEventListener("change", () => {
+  void renderChart(runId, lastTtm);
+});
+
+/** Explicit choice overrides the OS setting; remembered per browser. */
+$("theme").addEventListener("click", () => {
+  const root = document.documentElement;
+  const isDark = root.dataset.theme ? root.dataset.theme === "dark" : darkQuery.matches;
+  const next = isDark ? "light" : "dark";
+  root.dataset.theme = next;
+  try {
+    localStorage.setItem("theme", next);
+  } catch {
+    // Storage unavailable (private mode): the choice lasts for this page only.
+  }
   void renderChart(runId, lastTtm);
 });
 

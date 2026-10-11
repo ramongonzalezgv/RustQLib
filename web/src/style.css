@@ -168,6 +168,25 @@ select {
   stroke-linejoin: round;
 }
 
+/* Theme toggle shows the icon of the theme it switches to. */
+.icon-sun {
+  display: none;
+}
+:root[data-theme="dark"] .icon-sun {
+  display: block;
+}
+:root[data-theme="dark"] .icon-moon {
+  display: none;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .icon-sun {
+    display: block;
+  }
+  :root:not([data-theme="light"]) .icon-moon {
+    display: none;
+  }
+}
+
 /* --- Layout ------------------------------------------------------------- */
 
 .layout {

@@ -88,6 +88,26 @@ for (const s of scenarios) {
   await page.close();
 }
 
+// Theme toggle: flips data-theme and the page background.
+{
+  const page = await browser.newPage({ colorScheme: "light" });
+  await page.goto(`${url}?s=${encode(base)}`);
+  await page.waitForSelector("#engine-rows tr");
+  const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  const before = await bg();
+  await page.click("#theme");
+  const theme = await page.evaluate(() => document.documentElement.dataset.theme);
+  const after = await bg();
+  if (theme !== "dark" || before === after) failures.push(`theme-toggle: theme=${theme}, bg ${before} -> ${after}`);
+  await page.reload();
+  await page.waitForSelector("#engine-rows tr");
+  const persisted = await page.evaluate(() => document.documentElement.dataset.theme);
+  if (persisted !== "dark") failures.push(`theme-toggle: not persisted (${persisted})`);
+  if (SHOTS) await page.screenshot({ path: "e2e/out/theme-toggle-dark.png", fullPage: true });
+  console.log(`${failures.some((f) => f.startsWith("theme-toggle")) ? "FAIL" : "ok  "} theme-toggle`);
+  await page.close();
+}
+
 await browser.close();
 server.httpServer.close();
 if (failures.length) {
