@@ -110,3 +110,17 @@ proptest! {
         prop_assert!(butterfly >= -1e-9 * s, "butterfly={butterfly}");
     }
 }
+
+#[test]
+fn deep_otm_put_is_positive_and_accurate() {
+    // S=100, K=20, sigma=20%, r=5%, q=0, T=183/365. mpmath (50 digits):
+    // 2.1603814591587665e-31. With 1 + erf(x) this used to round to 0.
+    let model = BlackScholesModel::new(0.2, 0.05, 0.0).expect("model");
+    let put = price(100.0, 20.0, 183, OptionType::Put, &model);
+    let expected = 2.160_381_459_158_766_5e-31;
+    assert!(put > 0.0);
+    assert!(
+        ((put - expected) / expected).abs() < 1e-10,
+        "put={put}, expected={expected}"
+    );
+}

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use quantlib_core::{CalibrationResult, OptionType, PricingEngine, QuantLibError, SimpleDate};
+use quantlib_core::{
+    CalibrationResult, OptionType, PricingEngine, QuantLibError, SimpleDate, norm_cdf,
+};
 use quantlib_engines::{FFTEngine, InterpolationKind};
 use quantlib_models::{BlackModel, BlackScholesModel, HestonModel, SabrModel};
 use quantlib_products::EuropeanOption;
@@ -1386,20 +1388,6 @@ fn intrinsic(option_type: OptionType, underlying: f64, strike: f64) -> f64 {
         OptionType::Call => (underlying - strike).max(0.0),
         OptionType::Put => (strike - underlying).max(0.0),
     }
-}
-
-fn norm_cdf(x: f64) -> f64 {
-    0.5 * (1.0 + libm_erf(x / std::f64::consts::SQRT_2))
-}
-
-fn libm_erf(x: f64) -> f64 {
-    #[link(name = "m")]
-    unsafe extern "C" {
-        fn erf(x: f64) -> f64;
-    }
-
-    // SAFETY: Calling a pure libm function with finite f64 inputs.
-    unsafe { erf(x) }
 }
 
 #[cfg(test)]
