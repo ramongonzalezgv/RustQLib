@@ -5,7 +5,7 @@ mod european_engine;
 mod simulators;
 
 pub use asian_engine::MonteCarloAsianEngine;
-pub use core::MonteCarloConfig;
+pub use core::{HestonScheme, MonteCarloConfig};
 pub use digital_engine::MonteCarloDigitalEngine;
 pub use european_engine::MonteCarloEuropeanEngine;
 
@@ -21,6 +21,7 @@ pub struct MonteCarloEngine {
     pub seed: Option<u64>,
     pub parallel: bool,
     pub chunk_size: usize,
+    pub heston_scheme: HestonScheme,
 }
 
 impl Default for MonteCarloEngine {
@@ -42,6 +43,11 @@ impl MonteCarloEngine {
 
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
         self.chunk_size = chunk_size.max(1);
+        self
+    }
+
+    pub fn with_heston_scheme(mut self, heston_scheme: HestonScheme) -> Self {
+        self.heston_scheme = heston_scheme;
         self
     }
 
@@ -101,6 +107,7 @@ impl MonteCarloEngine {
             seed: self.seed,
             parallel: self.parallel,
             chunk_size: self.chunk_size,
+            heston_scheme: self.heston_scheme,
         }
     }
 
@@ -111,6 +118,7 @@ impl MonteCarloEngine {
             seed: config.seed,
             parallel: config.parallel,
             chunk_size: config.chunk_size,
+            heston_scheme: config.heston_scheme,
         }
     }
 }

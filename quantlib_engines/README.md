@@ -34,6 +34,10 @@ Engines implement `quantlib_core::PricingEngine<P, M>` for supported combination
   - Supports:
     - `EuropeanOption`, `DigitalOption`, `AsianOption` under `BlackScholesModel`
     - `EuropeanOption`, `DigitalOption`, `AsianOption` under `HestonModel`
+  - Heston variance discretization via `HestonScheme` (`with_heston_scheme`):
+    - `QuadraticExponential` (default): Andersen (2008) QE with martingale correction, low bias
+      even at 10–30 steps per year
+    - `FullTruncation`: Euler with full truncation (Lord et al. 2010); needs fine steps
 - **`BinomialEngine`**
   - Tree-based engine module (see exported types)
 - **Batch helpers**

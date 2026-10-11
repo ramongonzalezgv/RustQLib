@@ -2,7 +2,7 @@ use quantlib_core::{PricingEngine, QuantLibError};
 use quantlib_models::{BlackScholesModel, HestonModel};
 use quantlib_products::AsianOption;
 
-use super::core::{MonteCarloConfig, discount_and_average};
+use super::core::{HestonScheme, MonteCarloConfig, discount_and_average};
 use super::simulators::{BlackScholesSimulator, HestonSimulator};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -28,6 +28,11 @@ impl MonteCarloAsianEngine {
 
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
         self.config = self.config.with_chunk_size(chunk_size);
+        self
+    }
+
+    pub fn with_heston_scheme(mut self, heston_scheme: HestonScheme) -> Self {
+        self.config = self.config.with_heston_scheme(heston_scheme);
         self
     }
 }
