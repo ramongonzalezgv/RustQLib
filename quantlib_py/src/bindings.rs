@@ -143,7 +143,7 @@ where
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "BlackScholesModel")]
+#[pyclass(module = "quantlib_py", name = "BlackScholesModel", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyBlackScholesModel {
     pub(crate) inner: BlackScholesModel,
@@ -180,7 +180,7 @@ impl PyBlackScholesModel {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "BlackModel")]
+#[pyclass(module = "quantlib_py", name = "BlackModel", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyBlackModel {
     pub(crate) inner: BlackModel,
@@ -209,7 +209,7 @@ impl PyBlackModel {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "HestonModel")]
+#[pyclass(module = "quantlib_py", name = "HestonModel", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyHestonModel {
     pub(crate) inner: HestonModel,
@@ -281,7 +281,7 @@ impl PyHestonModel {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "BatesModel")]
+#[pyclass(module = "quantlib_py", name = "BatesModel", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyBatesModel {
     pub(crate) inner: BatesModel,
@@ -386,7 +386,7 @@ impl PyBatesModel {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "KouModel")]
+#[pyclass(module = "quantlib_py", name = "KouModel", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyKouModel {
     pub(crate) inner: KouModel,
@@ -458,7 +458,7 @@ impl PyKouModel {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "EuropeanOptionSpot")]
+#[pyclass(module = "quantlib_py", name = "EuropeanOptionSpot", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyEuropeanOptionSpot {
     pub(crate) inner: EuropeanOption,
@@ -538,7 +538,7 @@ impl PyEuropeanOptionSpot {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "EuropeanOptionForward")]
+#[pyclass(module = "quantlib_py", name = "EuropeanOptionForward", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyEuropeanOptionForward {
     pub(crate) inner: EuropeanOption,
@@ -618,7 +618,7 @@ impl PyEuropeanOptionForward {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "DigitalOptionSpot")]
+#[pyclass(module = "quantlib_py", name = "DigitalOptionSpot", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyDigitalOptionSpot {
     pub(crate) inner: DigitalOption,
@@ -627,6 +627,7 @@ pub(crate) struct PyDigitalOptionSpot {
 #[pymethods]
 impl PyDigitalOptionSpot {
     #[new]
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (spot, strike, expiry_date, valuation_date = None, option_type = "call", qty = 1, payout = 1.0, payoff_type = "cash"))]
     pub(crate) fn new(
         spot: f64,
@@ -722,7 +723,7 @@ impl PyDigitalOptionSpot {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "DigitalOptionForward")]
+#[pyclass(module = "quantlib_py", name = "DigitalOptionForward", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyDigitalOptionForward {
     pub(crate) inner: DigitalOption,
@@ -731,6 +732,7 @@ pub(crate) struct PyDigitalOptionForward {
 #[pymethods]
 impl PyDigitalOptionForward {
     #[new]
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (forward, strike, expiry_date, valuation_date = None, option_type = "call", qty = 1, payout = 1.0, payoff_type = "cash"))]
     pub(crate) fn new(
         forward: f64,
@@ -826,7 +828,7 @@ impl PyDigitalOptionForward {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "AsianOptionSpot")]
+#[pyclass(module = "quantlib_py", name = "AsianOptionSpot", from_py_object)]
 #[derive(Clone)]
 pub(crate) struct PyAsianOptionSpot {
     pub(crate) inner: AsianOption,
@@ -922,7 +924,7 @@ impl PyAsianOptionSpot {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "AnalyticalEngine")]
+#[pyclass(module = "quantlib_py", name = "AnalyticalEngine", from_py_object)]
 #[derive(Default, Clone, Copy)]
 pub(crate) struct PyAnalyticalEngine {
     pub(crate) inner: AnalyticalEngine,
@@ -947,7 +949,7 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -976,7 +978,7 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || price_products_single_model(engine, products, model, parallel))
+        py.detach(move || price_products_single_model(engine, products, model, parallel))
             .map_err(to_py_err)
     }
 
@@ -1019,7 +1021,7 @@ impl PyAnalyticalEngine {
 
         let engine = self.inner;
 
-        py.allow_threads(move || price_products_per_model(engine, products, local_models, parallel))
+        py.detach(move || price_products_per_model(engine, products, local_models, parallel))
             .map_err(to_py_err)
     }
 
@@ -1044,7 +1046,7 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1064,7 +1066,7 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || price_products_single_model(engine, products, model, parallel))
+        py.detach(move || price_products_single_model(engine, products, model, parallel))
             .map_err(to_py_err)
     }
 
@@ -1096,7 +1098,7 @@ impl PyAnalyticalEngine {
 
         let engine = self.inner;
 
-        py.allow_threads(move || price_products_per_model(engine, products, local_models, parallel))
+        py.detach(move || price_products_per_model(engine, products, local_models, parallel))
             .map_err(to_py_err)
     }
 
@@ -1110,7 +1112,7 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1130,7 +1132,7 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || price_products_single_model(engine, products, model, parallel))
+        py.detach(move || price_products_single_model(engine, products, model, parallel))
             .map_err(to_py_err)
     }
 
@@ -1144,7 +1146,7 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1164,12 +1166,12 @@ impl PyAnalyticalEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || price_products_single_model(engine, products, model, parallel))
+        py.detach(move || price_products_single_model(engine, products, model, parallel))
             .map_err(to_py_err)
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "FFTEngine")]
+#[pyclass(module = "quantlib_py", name = "FFTEngine", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyFFTEngine {
     pub(crate) inner: RustFFTEngine,
@@ -1214,7 +1216,7 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1228,7 +1230,7 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1242,7 +1244,7 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1256,7 +1258,7 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1275,10 +1277,8 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn price_european_black(
@@ -1291,7 +1291,7 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1310,10 +1310,8 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     #[pyo3(signature = (options, model, parallel_batch = true))]
@@ -1331,10 +1329,8 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     #[pyo3(signature = (options, model, parallel_batch = true))]
@@ -1352,10 +1348,8 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     #[pyo3(signature = (options, model, parallel_batch = true))]
@@ -1373,10 +1367,8 @@ impl PyFFTEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn __repr__(&self) -> String {
@@ -1389,7 +1381,7 @@ impl PyFFTEngine {
     }
 }
 
-#[pyclass(module = "quantlib_py", name = "MonteCarloEngine")]
+#[pyclass(module = "quantlib_py", name = "MonteCarloEngine", from_py_object)]
 #[derive(Clone, Copy)]
 pub(crate) struct PyMonteCarloEngine {
     pub(crate) inner: MonteCarloEngine,
@@ -1449,7 +1441,7 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1469,10 +1461,8 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn price_european_heston(
@@ -1485,7 +1475,7 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1505,10 +1495,8 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn price_digital_bs(
@@ -1521,7 +1509,7 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1541,10 +1529,8 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn price_digital_heston(
@@ -1557,7 +1543,7 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1577,10 +1563,8 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn price_asian_bs(
@@ -1593,7 +1577,7 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1613,10 +1597,8 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn price_asian_heston(
@@ -1629,7 +1611,7 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || engine.calculate_price(&option, &model))
+        py.detach(move || engine.calculate_price(&option, &model))
             .map_err(to_py_err)
     }
 
@@ -1649,10 +1631,8 @@ impl PyMonteCarloEngine {
         let model = model.inner;
         let engine = self.inner;
 
-        py.allow_threads(move || {
-            price_products_single_model(engine, products, model, parallel_batch)
-        })
-        .map_err(to_py_err)
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
     }
 
     fn __repr__(&self) -> String {

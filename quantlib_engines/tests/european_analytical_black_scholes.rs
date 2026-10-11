@@ -1,45 +1,112 @@
-use quantlib_core::{OptionType, PricingEngine, SimpleDate};
+mod common;
+
+use common::{assert_close, spot_option, ttm_of};
+use proptest::prelude::*;
+use quantlib_core::{OptionType, PricingEngine};
 use quantlib_engines::AnalyticalEngine;
 use quantlib_models::BlackScholesModel;
-use quantlib_products::EuropeanOption;
+
+fn price(s: f64, k: f64, days: i64, option_type: OptionType, model: &BlackScholesModel) -> f64 {
+    AnalyticalEngine
+        .calculate_price(&spot_option(s, k, days, option_type), model)
+        .expect("analytical price")
+}
 
 #[test]
-fn put_call_parity_holds() {
-    let expiry = SimpleDate::new(2027, 2, 10).expect("valid date");
-    let valuation = SimpleDate::new(2026, 2, 10).expect("valid date");
+fn matches_published_reference_values() {
+    // Textbook case S=K=100, T=1, r=5%, sigma=20%, q=0.
+    // Call 10.450583572185565, put 5.573526022256971 (e.g. Hull, "Options,
+    // Futures and Other Derivatives", and any closed-form BS calculator).
+    let model = BlackScholesModel::new(0.2, 0.05, 0.0).expect("model");
+    assert_close(
+        price(100.0, 100.0, 365, OptionType::Call, &model),
+        10.450_583_572_185_565,
+        1e-8,
+        "BS call",
+    );
+    assert_close(
+        price(100.0, 100.0, 365, OptionType::Put, &model),
+        5.573_526_022_256_971,
+        1e-8,
+        "BS put",
+    );
+}
 
-    let call = EuropeanOption::new_spot(
-        100.0,
-        100.0,
-        expiry,
-        Some(valuation),
-        OptionType::Call,
-        1,
-        None,
+#[test]
+fn zero_vol_limit_is_discounted_forward_intrinsic() {
+    let (s, r, q, days) = (100.0, 0.05, 0.02, 365);
+    let t = ttm_of(days);
+    let model = BlackScholesModel::new(1e-8, r, q).expect("model");
+    for k in [80.0, 95.0, 120.0] {
+        let fwd_intrinsic = (s * (-q * t).exp() - k * (-r * t).exp()).max(0.0);
+        assert_close(
+            price(s, k, days, OptionType::Call, &model),
+            fwd_intrinsic,
+            1e-8,
+            "sigma->0 call",
+        );
+    }
+}
+
+fn arb_inputs() -> impl Strategy<Value = (f64, f64, i64, f64, f64, f64)> {
+    (
+        50.0..150.0f64, // spot
+        50.0..150.0f64, // strike
+        7i64..1500,     // days to expiry
+        0.05..0.8f64,   // sigma
+        0.0..0.08f64,   // r
+        0.0..0.05f64,   // q
     )
-    .expect("call option");
+}
 
-    let put = EuropeanOption::new_spot(
-        100.0,
-        100.0,
-        expiry,
-        Some(valuation),
-        OptionType::Put,
-        1,
-        None,
-    )
-    .expect("put option");
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
 
-    let model = BlackScholesModel::new(0.2, 0.05, 0.01).expect("model");
-    let engine = AnalyticalEngine;
+    #[test]
+    fn put_call_parity((s, k, days, sigma, r, q) in arb_inputs()) {
+        let model = BlackScholesModel::new(sigma, r, q).unwrap();
+        let t = ttm_of(days);
+        let c = price(s, k, days, OptionType::Call, &model);
+        let p = price(s, k, days, OptionType::Put, &model);
+        let rhs = s * (-q * t).exp() - k * (-r * t).exp();
+        prop_assert!((c - p - rhs).abs() < 1e-9 * s, "c-p={} rhs={}", c - p, rhs);
+    }
 
-    let call_price = engine.calculate_price(&call, &model).expect("call price");
-    let put_price = engine.calculate_price(&put, &model).expect("put price");
+    #[test]
+    fn no_arbitrage_bounds((s, k, days, sigma, r, q) in arb_inputs()) {
+        let model = BlackScholesModel::new(sigma, r, q).unwrap();
+        let t = ttm_of(days);
+        let (ds, dk) = (s * (-q * t).exp(), k * (-r * t).exp());
+        let tol = 1e-10 * s;
+        let c = price(s, k, days, OptionType::Call, &model);
+        let p = price(s, k, days, OptionType::Put, &model);
+        prop_assert!(c >= (ds - dk).max(0.0) - tol && c <= ds + tol, "call {c} outside bounds");
+        prop_assert!(p >= (dk - ds).max(0.0) - tol && p <= dk + tol, "put {p} outside bounds");
+    }
 
-    let t = call.ttm();
-    let rhs = call.require_spot().expect("spot quote") * (-(model.q) * t).exp()
-        - call.k * (-(model.r) * t).exp();
-    let lhs = call_price - put_price;
+    #[test]
+    fn monotone_in_spot_strike_and_vol((s, k, days, sigma, r, q) in arb_inputs()) {
+        let model = BlackScholesModel::new(sigma, r, q).unwrap();
+        let higher_vol = BlackScholesModel::new(sigma * 1.1, r, q).unwrap();
+        let tol = 1e-10 * s;
+        let c = price(s, k, days, OptionType::Call, &model);
+        let p = price(s, k, days, OptionType::Put, &model);
 
-    assert!((lhs - rhs).abs() < 1.0e-6, "lhs={lhs}, rhs={rhs}");
+        prop_assert!(price(s * 1.01, k, days, OptionType::Call, &model) >= c - tol);
+        prop_assert!(price(s * 1.01, k, days, OptionType::Put, &model) <= p + tol);
+        prop_assert!(price(s, k * 1.01, days, OptionType::Call, &model) <= c + tol);
+        prop_assert!(price(s, k * 1.01, days, OptionType::Put, &model) >= p - tol);
+        prop_assert!(price(s, k, days, OptionType::Call, &higher_vol) >= c - tol);
+        prop_assert!(price(s, k, days, OptionType::Put, &higher_vol) >= p - tol);
+    }
+
+    #[test]
+    fn convex_in_strike((s, k, days, sigma, r, q) in arb_inputs()) {
+        let model = BlackScholesModel::new(sigma, r, q).unwrap();
+        let h = 1.0;
+        let butterfly = price(s, k - h, days, OptionType::Call, &model)
+            - 2.0 * price(s, k, days, OptionType::Call, &model)
+            + price(s, k + h, days, OptionType::Call, &model);
+        prop_assert!(butterfly >= -1e-9 * s, "butterfly={butterfly}");
+    }
 }

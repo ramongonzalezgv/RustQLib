@@ -274,6 +274,7 @@ fn cache_key_for_european(
     let mut kwargs = BTreeMap::new();
     kwargs.insert("engine".to_owned(), "binomial".to_owned());
     kwargs.insert("n_steps".to_owned(), n_steps.to_string());
+    kwargs.insert("exercise".to_owned(), "european".to_owned());
 
     format!(
         "prod={:?}|model={:?}|kwargs={:?}",
@@ -291,6 +292,7 @@ fn cache_key_for_american(
     let mut kwargs = BTreeMap::new();
     kwargs.insert("engine".to_owned(), "binomial".to_owned());
     kwargs.insert("n_steps".to_owned(), n_steps.to_string());
+    kwargs.insert("exercise".to_owned(), "american".to_owned());
 
     format!(
         "prod={:?}|model={:?}|kwargs={:?}",

@@ -87,40 +87,6 @@ fn fft_heston_put_call_parity_holds() {
 }
 
 #[test]
-fn fft_heston_converges_to_black_scholes_for_low_vol_of_vol() {
-    let valuation = SimpleDate::new(2026, 2, 10).expect("date");
-    let expiry = SimpleDate::new(2027, 2, 10).expect("date");
-
-    let product = EuropeanOption::new_spot(
-        100.0,
-        95.0,
-        expiry,
-        Some(valuation),
-        OptionType::Call,
-        1,
-        None,
-    )
-    .expect("option");
-
-    let heston = HestonModel::new(8.0, 0.04, 1.0e-4, 0.0, 0.04, 0.02, 0.01).expect("heston");
-    let bs = BlackScholesModel::new(0.2, 0.02, 0.01).expect("bs");
-
-    let fft = FFTEngine::new(1 << 12, 200.0, InterpolationKind::Cubic).expect("fft");
-    let analytical = AnalyticalEngine;
-
-    let fft_price = fft.calculate_price(&product, &heston).expect("fft price");
-    let bs_price = analytical
-        .calculate_price(&product, &bs)
-        .expect("analytical bs price");
-
-    let abs_diff = (fft_price - bs_price).abs();
-    assert!(
-        abs_diff < 2.0e-2,
-        "fft={fft_price}, bs={bs_price}, abs_diff={abs_diff}"
-    );
-}
-
-#[test]
 fn fft_returns_intrinsic_when_ttm_is_zero() {
     let valuation = SimpleDate::new(2026, 2, 10).expect("date");
 
@@ -247,4 +213,41 @@ fn reference_lewis_call(
     let integral = du * integral_sum / 3.0;
     spot * (-(model.q) * ttm).exp()
         - (spot * strike).sqrt() * (-(model.r) * ttm).exp() * integral / PI
+}
+
+#[test]
+fn fft_heston_zero_vol_of_vol_matches_black_scholes_with_integrated_variance() {
+    // With sigma -> 0 the variance is deterministic,
+    // v(t) = theta + (v0 - theta) e^{-kappa t}, so Heston reduces to BS with
+    // the time-averaged variance over [0, T].
+    let valuation = SimpleDate::new(2026, 1, 1).expect("date");
+    let expiry = valuation.add_days(365);
+    let (kappa, theta, v0, r, q) = (1.5, 0.06, 0.03, 0.03, 0.01);
+    let engine = FFTEngine::default();
+
+    for vol_of_vol in [0.0, 1e-4] {
+        let heston = HestonModel::new(kappa, theta, vol_of_vol, -0.5, v0, r, q).expect("model");
+        for strike in [85.0, 100.0, 115.0] {
+            let option = EuropeanOption::new_spot(
+                100.0,
+                strike,
+                expiry,
+                Some(valuation),
+                OptionType::Call,
+                1,
+                None,
+            )
+            .expect("option");
+            let t = option.ttm();
+            let avg_var = theta + (v0 - theta) * (1.0 - (-kappa * t).exp()) / (kappa * t);
+            let bs = BlackScholesModel::new(avg_var.sqrt(), r, q).expect("bs model");
+
+            let heston_price = engine.calculate_price(&option, &heston).expect("fft");
+            let bs_price = AnalyticalEngine.calculate_price(&option, &bs).expect("bs");
+            assert!(
+                (heston_price - bs_price).abs() < 5e-3,
+                "vol_of_vol={vol_of_vol}, K={strike}: heston={heston_price}, bs={bs_price}"
+            );
+        }
+    }
 }

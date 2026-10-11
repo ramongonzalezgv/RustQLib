@@ -9,10 +9,13 @@ name = "quantlib_py"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
-numpy = "0.23"
+pyo3 = { version = "0.29", features = ["extension-module"] }
+numpy = "0.29"
 quantlib_core = { path = "../quantlib_core" }
 quantlib_models = { path = "../quantlib_models" }
 quantlib_products = { path = "../quantlib_products" }
 quantlib_engines = { path = "../quantlib_engines" }
 quantlib_utils = { path = "../quantlib_utils" }
+
+[build-dependencies]
+pyo3-build-config = "0.29"
