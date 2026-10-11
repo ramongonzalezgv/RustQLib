@@ -343,9 +343,10 @@ fn validate_common_sabr(alpha: f64, rho: f64, nu: f64) -> Result<(), QuantLibErr
             "alpha must be positive".to_owned(),
         ));
     }
-    if !(-1.0..=1.0).contains(&rho) {
+    // Hagan's x(z) divides by 1 - rho and 1 + rho: |rho| = 1 is degenerate.
+    if !(rho > -1.0 && rho < 1.0) {
         return Err(QuantLibError::Validation(
-            "rho must be between -1 and 1".to_owned(),
+            "rho must be strictly between -1 and 1".to_owned(),
         ));
     }
     if nu <= 0.0 {
@@ -382,22 +383,66 @@ fn validate_optional_f0(f0: Option<f64>) -> Result<(), QuantLibError> {
     Ok(())
 }
 
-fn compute_chi(z: f64, rho: f64) -> f64 {
-    let discriminant = (1.0 - 2.0 * rho * z + z * z).max(0.0);
-    let sqrt_term = discriminant.sqrt();
-
-    let numerator = sqrt_term + z - rho;
-    let denominator = 1.0 - rho;
-
-    if denominator.abs() < 1.0e-12 {
-        return z;
+/// `z / x(z)` from Hagan et al. (2002), with
+/// `x(z) = ln((sqrt(1 - 2 rho z + z^2) + z - rho) / (1 - rho))`.
+///
+/// `x(z)` is evaluated through `ln_1p` on a cancellation-free argument
+/// (using `sqrt(D) - 1 = (z^2 - 2 rho z) / (sqrt(D) + 1)`), separately for
+/// each sign of `z` via `(sqrt(D) + z - rho)(sqrt(D) - z + rho) = 1 - rho^2`.
+/// Near `z = 0` the ratio uses its Taylor expansion, so the smile is one
+/// continuous formula across the money.
+fn z_over_x(z: f64, rho: f64) -> f64 {
+    if z.abs() < 1.0e-6 {
+        // Error O(z^3) < 1e-18.
+        return 1.0 - 0.5 * rho * z + (2.0 - 3.0 * rho * rho) * z * z / 12.0;
     }
+    let sqrt_d = (1.0 - 2.0 * rho * z + z * z).sqrt();
+    let sqrt_d_minus_1 = (z * z - 2.0 * rho * z) / (sqrt_d + 1.0);
+    let x = if z >= 0.0 {
+        ((sqrt_d_minus_1 + z) / (1.0 - rho)).ln_1p()
+    } else {
+        -((sqrt_d_minus_1 - z) / (1.0 + rho)).ln_1p()
+    };
+    z / x
+}
 
-    if numerator <= 0.0 {
-        return z.abs();
-    }
+/// Hagan et al. (2002), "Managing Smile Risk", eq. (2.17a): Black (lognormal)
+/// implied volatility for `0 <= beta <= 1`. At `K = F` it reduces to the ATM
+/// formula (2.18) without a separate branch.
+fn hagan_lognormal_vol(
+    alpha: f64,
+    beta: f64,
+    rho: f64,
+    nu: f64,
+    forward: f64,
+    strike: f64,
+    ttm: f64,
+) -> f64 {
+    let one_minus_beta = 1.0 - beta;
+    let log_fk = (forward / strike).ln();
+    let fk_pow = (forward * strike).powf(0.5 * one_minus_beta);
 
-    (numerator / denominator).ln()
+    let omb2_log2 = one_minus_beta * one_minus_beta * log_fk * log_fk;
+    let moneyness_series = 1.0 + omb2_log2 / 24.0 + omb2_log2 * omb2_log2 / 1920.0;
+
+    let z = nu / alpha * fk_pow * log_fk;
+
+    let time_correction = 1.0
+        + (one_minus_beta * one_minus_beta * alpha * alpha / (24.0 * fk_pow * fk_pow)
+            + rho * beta * nu * alpha / (4.0 * fk_pow)
+            + (2.0 - 3.0 * rho * rho) * nu * nu / 24.0)
+            * ttm;
+
+    alpha / (fk_pow * moneyness_series) * z_over_x(z, rho) * time_correction
+}
+
+/// Hagan et al. (2002) normal (Bachelier) implied volatility for `beta = 0`:
+/// `alpha * z/x(z) * (1 + (2 - 3 rho^2) nu^2 T / 24)`, `z = nu/alpha (F - K)`.
+/// The `rho beta nu alpha / 4` and `beta (2 - beta) alpha^2` terms of the
+/// general expansion vanish at `beta = 0`.
+fn hagan_normal_vol(alpha: f64, rho: f64, nu: f64, forward: f64, strike: f64, ttm: f64) -> f64 {
+    let z = nu / alpha * (forward - strike);
+    alpha * z_over_x(z, rho) * (1.0 + (2.0 - 3.0 * rho * rho) * nu * nu * ttm / 24.0)
 }
 
 fn implied_vol_general(
@@ -407,51 +452,15 @@ fn implied_vol_general(
     ttm: f64,
 ) -> Result<f64, QuantLibError> {
     validate_fk_ttm(forward, strike, ttm)?;
-
-    if (forward - strike).abs() < 1.0e-10 {
-        return Ok(atm_vol_general(model, forward, ttm));
-    }
-
-    let z = (model.nu / model.alpha)
-        * (forward * strike).powf((1.0 - model.beta) / 2.0)
-        * (forward / strike).ln();
-    let chi_z = compute_chi(z, model.rho);
-
-    if chi_z.abs() < 1.0e-10 {
-        return Ok(atm_vol_general(model, forward, ttm));
-    }
-
-    let main_term = model.alpha / (forward * strike).powf((1.0 - model.beta) / 2.0) * z / chi_z;
-
-    let log_fk = (forward / strike).ln();
-    let fk_power = (forward * strike).powf((1.0 - model.beta) / 2.0);
-
-    let term1 = (((1.0 - model.beta).powi(2) / 24.0) * (model.alpha * model.alpha)
-        / (fk_power * fk_power)
-        + model.rho * model.beta * model.nu * model.alpha / (4.0 * fk_power)
-        + (2.0 - 3.0 * model.rho * model.rho) * model.nu * model.nu / 24.0)
-        * ttm;
-
-    let term2 = if z.abs() > 1.0e-6 {
-        ((1.0 - model.beta).powi(2) * log_fk * log_fk / 24.0)
-            + ((1.0 - model.beta).powi(4) * log_fk.powi(4) / 1920.0)
-    } else {
-        0.0
-    };
-
-    Ok(main_term * (1.0 + term1 + term2))
-}
-
-fn atm_vol_general(model: &GeneralSabrModel, forward: f64, ttm: f64) -> f64 {
-    let fk_power = forward.powf(1.0 - model.beta);
-
-    let correction = (((1.0 - model.beta).powi(2) / 24.0) * (model.alpha * model.alpha)
-        / (fk_power * fk_power)
-        + model.rho * model.beta * model.nu * model.alpha / (4.0 * fk_power)
-        + (2.0 - 3.0 * model.rho * model.rho) * model.nu * model.nu / 24.0)
-        * ttm;
-
-    model.alpha / fk_power * (1.0 + correction)
+    Ok(hagan_lognormal_vol(
+        model.alpha,
+        model.beta,
+        model.rho,
+        model.nu,
+        forward,
+        strike,
+        ttm,
+    ))
 }
 
 fn implied_vol_normal(
@@ -461,32 +470,14 @@ fn implied_vol_normal(
     ttm: f64,
 ) -> Result<f64, QuantLibError> {
     validate_fk_ttm(forward, strike, ttm)?;
-
-    if (forward - strike).abs() < 1.0e-10 {
-        return Ok(atm_vol_normal(model, ttm));
-    }
-
-    let z = (model.nu / model.alpha) * (forward - strike);
-    let chi_z = compute_chi(z, model.rho);
-
-    if chi_z.abs() < 1.0e-10 {
-        return Ok(atm_vol_normal(model, ttm));
-    }
-
-    let main_term = model.alpha * z / chi_z;
-    let correction = (model.rho * model.nu * model.alpha / 4.0
-        + (2.0 - 3.0 * model.rho * model.rho) * model.nu * model.nu / 24.0)
-        * ttm;
-
-    Ok(main_term * (1.0 + correction))
-}
-
-fn atm_vol_normal(model: &NormalSabrModel, ttm: f64) -> f64 {
-    let correction = (model.rho * model.nu * model.alpha / 4.0
-        + (2.0 - 3.0 * model.rho * model.rho) * model.nu * model.nu / 24.0)
-        * ttm;
-
-    model.alpha * (1.0 + correction)
+    Ok(hagan_normal_vol(
+        model.alpha,
+        model.rho,
+        model.nu,
+        forward,
+        strike,
+        ttm,
+    ))
 }
 
 fn implied_vol_lognormal(
@@ -496,40 +487,15 @@ fn implied_vol_lognormal(
     ttm: f64,
 ) -> Result<f64, QuantLibError> {
     validate_fk_ttm(forward, strike, ttm)?;
-
-    if (forward - strike).abs() < 1.0e-10 {
-        return Ok(atm_vol_lognormal(model, ttm));
-    }
-
-    let log_fk = (forward / strike).ln();
-    let z = (model.nu / model.alpha) * log_fk;
-    let chi_z = compute_chi(z, model.rho);
-
-    if chi_z.abs() < 1.0e-10 {
-        return Ok(atm_vol_lognormal(model, ttm));
-    }
-
-    let main_term = model.alpha * z / chi_z;
-
-    let term1 = (model.rho * model.nu * model.alpha / 4.0
-        + (2.0 - 3.0 * model.rho * model.rho) * model.nu * model.nu / 24.0)
-        * ttm;
-
-    let term2 = if z.abs() > 1.0e-6 {
-        (log_fk * log_fk) / 24.0 + log_fk.powi(4) / 1920.0
-    } else {
-        0.0
-    };
-
-    Ok(main_term * (1.0 + term1 + term2))
-}
-
-fn atm_vol_lognormal(model: &LognormalSabrModel, ttm: f64) -> f64 {
-    let correction = (model.rho * model.nu * model.alpha / 4.0
-        + (2.0 - 3.0 * model.rho * model.rho) * model.nu * model.nu / 24.0)
-        * ttm;
-
-    model.alpha * (1.0 + correction)
+    Ok(hagan_lognormal_vol(
+        model.alpha,
+        1.0,
+        model.rho,
+        model.nu,
+        forward,
+        strike,
+        ttm,
+    ))
 }
 
 #[cfg(test)]
@@ -562,6 +528,33 @@ mod tests {
             .expect("base vol with shifted F/K");
 
         assert!((vol_shifted - vol_base).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn z_over_x_is_finite_and_positive_over_wide_range() {
+        for rho in [-0.99, 0.0, 0.99] {
+            for i in -500..=500 {
+                let z = f64::from(i) / 10.0;
+                let ratio = super::z_over_x(z, rho);
+                assert!(
+                    ratio.is_finite() && ratio > 0.0,
+                    "z={z}, rho={rho}: {ratio}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn z_over_x_series_matches_closed_form_at_the_switch() {
+        // Both sides of the |z| = 1e-6 switch agree to O(z^3).
+        for rho in [-0.9, -0.3, 0.0, 0.5, 0.9] {
+            let below = super::z_over_x(0.999_999e-6, rho);
+            let above = super::z_over_x(1.000_001e-6, rho);
+            assert!(
+                (below - above).abs() < 1e-12,
+                "rho={rho}: {below} vs {above}"
+            );
+        }
     }
 
     #[test]

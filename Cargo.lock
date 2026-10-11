@@ -767,6 +767,7 @@ name = "quantlib_models"
 version = "0.1.0"
 dependencies = [
  "num-complex",
+ "proptest",
  "quantlib_core",
 ]
 

@@ -1,6 +1,7 @@
 name: Deploy playground
 
-# Manual only until the SABR formulas are fixed (#1); then add:
+# Manual for now. Once GitHub Pages is enabled (Settings > Pages > Source:
+# GitHub Actions), add a push trigger to redeploy on every merge:
 #   push:
 #     branches: [main]
 on:

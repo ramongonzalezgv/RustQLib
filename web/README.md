@@ -43,6 +43,6 @@ native ones.
 
 ## Deploy
 
-`.github/workflows/pages.yml` publishes `dist/` to GitHub Pages. It is manual
-(`workflow_dispatch`) until the SABR formulas are fixed (#1). Enable Pages with
-source "GitHub Actions" in the repository settings first.
+`.github/workflows/pages.yml` publishes `dist/` to GitHub Pages. It runs on
+demand (`workflow_dispatch`); enable Pages with source "GitHub Actions" in the
+repository settings first.
