@@ -1,6 +1,4 @@
-use std::collections::BTreeMap;
-
-use quantlib_core::{QuantLibError, StochasticModel};
+use quantlib_core::QuantLibError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct BlackModel {
@@ -33,15 +31,6 @@ impl BlackModel {
 
     pub fn d2(&self, forward: f64, strike: f64, ttm: f64) -> f64 {
         self.d1(forward, strike, ttm) - self.sigma * ttm.sqrt()
-    }
-}
-
-impl StochasticModel for BlackModel {
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("sigma".to_owned(), self.sigma.to_string()),
-            ("r".to_owned(), self.r.to_string()),
-        ])
     }
 }
 

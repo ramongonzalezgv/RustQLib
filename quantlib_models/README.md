@@ -4,7 +4,7 @@ Stochastic models for QuantRustLib.
 
 Models hold parameters (volatility, rates, jump parameters, etc.) and provide model-specific helpers (e.g. Black-Scholes `d1/d2`, Heston characteristic function) used by pricing engines in [`quantlib_engines`](../quantlib_engines/README.md).
 
-All models implement `quantlib_core::StochasticModel` which supplies a **stable parameter map** used by caching and batch valuation.
+Characteristic-function models (Black-Scholes, Black, Heston, Bates, Kou) implement `FourierModel`, which the FFT and COS engines price through.
 
 ## Models currently implemented
 

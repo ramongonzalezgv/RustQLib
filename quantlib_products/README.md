@@ -6,7 +6,6 @@ Products are responsible for:
 
 - **Validation** of contract inputs (finite numbers, date ordering, etc.)
 - **Payoff logic** at maturity (or from simulated paths for path-dependent products)
-- **Parameter reporting** via `FinancialProduct::get_parameters()` (used for caching keys and metadata)
 
 Pricing is performed by engines in [`quantlib_engines`](../quantlib_engines/README.md).
 

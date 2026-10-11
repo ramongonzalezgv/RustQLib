@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
-
 use num_complex::Complex64;
-use quantlib_core::{QuantLibError, StochasticModel};
+use quantlib_core::QuantLibError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct KouModel {
@@ -101,20 +99,6 @@ impl KouModel {
         let jump = self.lambda_jump * ttm * (jump_cf - Complex64::new(1.0, 0.0));
 
         (i * u * drift + diffusion + jump).exp()
-    }
-}
-
-impl StochasticModel for KouModel {
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("sigma".to_owned(), self.sigma.to_string()),
-            ("r".to_owned(), self.r.to_string()),
-            ("q".to_owned(), self.q.to_string()),
-            ("lambda_jump".to_owned(), self.lambda_jump.to_string()),
-            ("p_up".to_owned(), self.p_up.to_string()),
-            ("eta1".to_owned(), self.eta1.to_string()),
-            ("eta2".to_owned(), self.eta2.to_string()),
-        ])
     }
 }
 

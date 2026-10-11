@@ -11,7 +11,7 @@ This repository also includes **Python bindings** (`quantlib_py`) for high-throu
 
 ## Workspace layout
 
-- [`quantlib_core`](./quantlib_core/README.md): shared primitives (dates/calendars), traits, valuation context (batch + cache)
+- [`quantlib_core`](./quantlib_core/README.md): shared primitives (dates/calendars), traits, errors
 - [`quantlib_products`](./quantlib_products/README.md): products (European, Digital, Asian, American)
 - [`quantlib_models`](./quantlib_models/README.md): models (Black(-Scholes), Heston, SABR, Bates, Kou)
 - [`quantlib_engines`](./quantlib_engines/README.md): pricing engines (Analytical, Binomial, Monte Carlo, FFT) + batch helpers
@@ -92,20 +92,16 @@ cd web && npm install && npm run dev
 
 In `quantlib_core`:
 
-- **`FinancialProduct`**: `payoff(&[f64]) -> Vec<f64>` and `get_parameters() -> BTreeMap<..>` (used for caching keys)
-- **`StochasticModel`**: `get_parameters()` (used for caching keys)
+- **`FinancialProduct`**: `payoff(&[f64]) -> Vec<f64>`
 - **`PricingEngine<P, M>`**: `calculate_price(&P, &M) -> Result<f64, QuantLibError>`
 
 Concrete products/models implement these traits; engines implement `PricingEngine` for supported `(product, model)` pairs.
 
-### `OptionValuationContext` (batch + cache)
+### Batch valuation
 
-Also in `quantlib_core`, `OptionValuationContext` wraps an engine and provides:
+`quantlib_engines` provides `calculate_prices_parallel` and `calculate_prices_parallel_per_model` (Rayon) for pricing many instruments with any engine.
 
-- **Optional LRU-like cache** keyed by product/model/kwargs parameter maps
-- **Optional parallel batch valuation** (Rayon)
-
-This is useful when you price many instruments repeatedly and want simple caching/batching without building a separate service.
+Engines are pure and keep no internal cache: pricing is cheap enough (e.g. ~25 ns analytic, ~11 µs COS Heston) that a cache lookup rarely pays off. Callers that re-price identical inputs (e.g. Monte Carlo on an unchanged book) can memoize on keys they control.
 
 ## Supported pricing methods (high level)
 

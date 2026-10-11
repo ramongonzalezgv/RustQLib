@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
 
 use quantlib_core::{FinancialProduct, MarketCalendar, OptionType, QuantLibError, SimpleDate};
 
@@ -227,27 +227,5 @@ impl FinancialProduct for EuropeanOption {
                 OptionType::Put => qty * (self.k - spot).max(0.0),
             })
             .collect()
-    }
-
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        let mut params = BTreeMap::from([
-            ("K".to_owned(), self.k.to_string()),
-            ("expiry_date".to_owned(), self.expiry_date.format_ymd()),
-            ("option_type".to_owned(), self.option_type.to_string()),
-            ("qty".to_owned(), self.qty.to_string()),
-        ]);
-
-        match self.underlying {
-            UnderlyingQuote::Spot(s) => {
-                params.insert("quote_type".to_owned(), "spot".to_owned());
-                params.insert("S".to_owned(), s.to_string());
-            }
-            UnderlyingQuote::Forward(f) => {
-                params.insert("quote_type".to_owned(), "forward".to_owned());
-                params.insert("F".to_owned(), f.to_string());
-            }
-        }
-
-        params
     }
 }

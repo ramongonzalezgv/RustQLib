@@ -1,7 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
-
-use quantlib_core::{FinancialProduct, OptionType, PricingEngine, QuantLibError, StochasticModel};
+use quantlib_core::{OptionType, PricingEngine, QuantLibError};
 use quantlib_models::BlackScholesModel;
 use quantlib_products::{AmericanOption, EuropeanOption};
 
@@ -14,17 +11,15 @@ pub struct BinomialLevels {
     pub down_factor: f64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct BinomialEngine {
     pub n_steps: usize,
-    cache: Mutex<HashMap<String, BinomialLevels>>,
 }
 
 impl BinomialEngine {
     pub fn new(n_steps: usize) -> Self {
         Self {
             n_steps: n_steps.max(1),
-            cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -39,15 +34,7 @@ impl BinomialEngine {
 
         let spot = product.require_spot()?;
         let steps = n_steps.unwrap_or(self.n_steps).max(1);
-        let key = cache_key_for_european(product, model, steps);
-
-        if let Ok(guard) = self.cache.lock()
-            && let Some(cached) = guard.get(&key)
-        {
-            return Ok(cached.clone());
-        }
-
-        let result = price_and_levels(
+        price_and_levels(
             BinomialInput {
                 spot,
                 strike: product.k,
@@ -58,13 +45,7 @@ impl BinomialEngine {
                 american_exercise: false,
             },
             model,
-        )?;
-
-        if let Ok(mut guard) = self.cache.lock() {
-            guard.insert(key, result.clone());
-        }
-
-        Ok(result)
+        )
     }
 
     pub fn price_and_levels_american(
@@ -78,15 +59,7 @@ impl BinomialEngine {
 
         let spot = product.european.require_spot()?;
         let steps = n_steps.unwrap_or(self.n_steps).max(1);
-        let key = cache_key_for_american(product, model, steps);
-
-        if let Ok(guard) = self.cache.lock()
-            && let Some(cached) = guard.get(&key)
-        {
-            return Ok(cached.clone());
-        }
-
-        let result = price_and_levels(
+        price_and_levels(
             BinomialInput {
                 spot,
                 strike: product.european.k,
@@ -97,13 +70,7 @@ impl BinomialEngine {
                 american_exercise: true,
             },
             model,
-        )?;
-
-        if let Ok(mut guard) = self.cache.lock() {
-            guard.insert(key, result.clone());
-        }
-
-        Ok(result)
+        )
     }
 }
 
@@ -264,42 +231,6 @@ fn intrinsic_value(option_type: OptionType, spot: f64, strike: f64, qty: i32) ->
         OptionType::Put => (strike - spot).max(0.0),
     };
     unsigned * f64::from(qty)
-}
-
-fn cache_key_for_european(
-    product: &EuropeanOption,
-    model: &BlackScholesModel,
-    n_steps: usize,
-) -> String {
-    let mut kwargs = BTreeMap::new();
-    kwargs.insert("engine".to_owned(), "binomial".to_owned());
-    kwargs.insert("n_steps".to_owned(), n_steps.to_string());
-    kwargs.insert("exercise".to_owned(), "european".to_owned());
-
-    format!(
-        "prod={:?}|model={:?}|kwargs={:?}",
-        product.get_parameters(),
-        model.get_parameters(),
-        kwargs
-    )
-}
-
-fn cache_key_for_american(
-    product: &AmericanOption,
-    model: &BlackScholesModel,
-    n_steps: usize,
-) -> String {
-    let mut kwargs = BTreeMap::new();
-    kwargs.insert("engine".to_owned(), "binomial".to_owned());
-    kwargs.insert("n_steps".to_owned(), n_steps.to_string());
-    kwargs.insert("exercise".to_owned(), "american".to_owned());
-
-    format!(
-        "prod={:?}|model={:?}|kwargs={:?}",
-        product.get_parameters(),
-        model.get_parameters(),
-        kwargs
-    )
 }
 
 #[cfg(test)]

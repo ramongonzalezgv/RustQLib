@@ -1,9 +1,12 @@
 mod common;
 
 use common::{american_option, assert_close, spot_option};
-use quantlib_core::{OptionType, PricingEngine};
+use std::sync::Arc;
+
+use quantlib_core::{MarketCalendar, OptionType, PricingEngine, SimpleDate, WeekdayCalendar};
 use quantlib_engines::{AnalyticalEngine, BinomialEngine};
 use quantlib_models::BlackScholesModel;
+use quantlib_products::EuropeanOption;
 
 fn model() -> BlackScholesModel {
     BlackScholesModel::new(0.25, 0.05, 0.02).expect("model")
@@ -117,9 +120,9 @@ fn american_put_matches_published_reference() {
 }
 
 #[test]
-fn cache_does_not_mix_european_and_american_prices() {
-    // Regression: both exercise styles used to share one cache key, so pricing
-    // the European first made the American return the European price.
+fn one_engine_prices_european_and_american_independently() {
+    // Regression: a cache inside the engine once keyed both exercise styles the
+    // same, so pricing the European first made the American return its price.
     let model = BlackScholesModel::new(0.25, 0.08, 0.0).expect("model");
     let engine = BinomialEngine::new(200);
     let european = engine
@@ -133,4 +136,47 @@ fn cache_does_not_mix_european_and_american_prices() {
         .unwrap();
     assert_eq!(american, american_fresh);
     assert!(american > european);
+}
+
+#[test]
+fn one_engine_reprices_options_that_differ_only_by_valuation_date_or_calendar() {
+    // Regression for #2: the engine's old cache key omitted the valuation date
+    // and the calendar, so these all returned the first option's price.
+    let model = model();
+    let engine = BinomialEngine::new(200);
+    let expiry = SimpleDate::new(2027, 2, 10).expect("date");
+    let option = |valuation: (i32, u32, u32), weekday_calendar: bool| {
+        let valuation = SimpleDate::new(valuation.0, valuation.1, valuation.2).expect("date");
+        let calendar = weekday_calendar
+            .then(|| Arc::new(WeekdayCalendar::default()) as Arc<dyn MarketCalendar>);
+        EuropeanOption::new_spot(
+            100.0,
+            100.0,
+            expiry,
+            Some(valuation),
+            OptionType::Call,
+            1,
+            calendar,
+        )
+        .expect("option")
+    };
+
+    let early = engine
+        .calculate_price(&option((2026, 2, 10), false), &model)
+        .unwrap();
+    let late = engine
+        .calculate_price(&option((2026, 8, 10), false), &model)
+        .unwrap();
+    let weekday = engine
+        .calculate_price(&option((2026, 2, 10), true), &model)
+        .unwrap();
+
+    assert!(early > late, "early={early}, late={late}");
+    assert_ne!(early, weekday, "calendar must change the price");
+    assert_eq!(
+        early,
+        BinomialEngine::new(200)
+            .calculate_price(&option((2026, 2, 10), false), &model)
+            .unwrap()
+    );
 }

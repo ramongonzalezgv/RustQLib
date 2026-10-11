@@ -22,5 +22,5 @@ The current example builds:
 
 and prints the resulting option price.
 
-If you add more examples (FFT, Monte Carlo, batch valuation via `OptionValuationContext`), this README is the place to document them.
+If you add more examples (FFT, COS, Monte Carlo, batch valuation via `calculate_prices_parallel`), this README is the place to document them.
 

@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
-
 use num_complex::Complex64;
-use quantlib_core::{QuantLibError, StochasticModel};
+use quantlib_core::QuantLibError;
 
 use crate::heston_model::HestonModel;
 
@@ -129,23 +127,6 @@ impl BatesModel {
             self.lambda_jump * ttm * (jump_log_cf - Complex64::new(1.0, 0.0) - i * u * jump_mean);
 
         heston_component * jump_exponent.exp()
-    }
-}
-
-impl StochasticModel for BatesModel {
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("kappa".to_owned(), self.kappa.to_string()),
-            ("theta".to_owned(), self.theta.to_string()),
-            ("sigma".to_owned(), self.sigma.to_string()),
-            ("rho".to_owned(), self.rho.to_string()),
-            ("v0".to_owned(), self.v0.to_string()),
-            ("r".to_owned(), self.r.to_string()),
-            ("q".to_owned(), self.q.to_string()),
-            ("lambda_jump".to_owned(), self.lambda_jump.to_string()),
-            ("mu_j".to_owned(), self.mu_j.to_string()),
-            ("sigma_j".to_owned(), self.sigma_j.to_string()),
-        ])
     }
 }
 
