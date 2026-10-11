@@ -1,5 +1,5 @@
+use std::str::FromStr;
 use std::sync::Arc;
-use std::{collections::BTreeMap, str::FromStr};
 
 use quantlib_core::{FinancialProduct, MarketCalendar, OptionType, QuantLibError, SimpleDate};
 
@@ -185,22 +185,11 @@ impl FinancialProduct for AsianOption {
             })
             .collect()
     }
-
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("S".to_owned(), self.s.to_string()),
-            ("K".to_owned(), self.k.to_string()),
-            ("expiry_date".to_owned(), self.expiry_date.format_ymd()),
-            ("option_type".to_owned(), self.option_type.to_string()),
-            ("qty".to_owned(), self.qty.to_string()),
-            ("averaging_type".to_owned(), self.averaging_type.to_string()),
-        ])
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use quantlib_core::{FinancialProduct, OptionType, SimpleDate};
+    use quantlib_core::{OptionType, SimpleDate};
 
     use super::{AsianOption, AveragingType};
 
@@ -248,23 +237,5 @@ mod tests {
             err.to_string()
                 .contains("requires strictly positive prices")
         );
-    }
-
-    #[test]
-    fn parameters_include_qty_for_cache_key_stability() {
-        let option = AsianOption::new(
-            100.0,
-            100.0,
-            SimpleDate::new(2027, 2, 10).expect("date"),
-            Some(SimpleDate::new(2026, 2, 10).expect("date")),
-            OptionType::Call,
-            3,
-            AveragingType::Arithmetic,
-            None,
-        )
-        .expect("valid option");
-
-        let params = option.get_parameters();
-        assert_eq!(params.get("qty"), Some(&"3".to_owned()));
     }
 }

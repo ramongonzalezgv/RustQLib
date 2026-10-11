@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use quantlib_core::{FinancialProduct, MarketCalendar, OptionType, QuantLibError, SimpleDate};
@@ -142,10 +141,6 @@ impl AmericanOption {
 impl FinancialProduct for AmericanOption {
     fn payoff(&self, spot_prices: &[f64]) -> Vec<f64> {
         self.european.payoff(spot_prices)
-    }
-
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        self.european.get_parameters()
     }
 }
 

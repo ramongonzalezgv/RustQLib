@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use quantlib_core::{QuantLibError, StochasticModel};
+use quantlib_core::QuantLibError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct GeneralSabrModel {
@@ -323,12 +323,6 @@ impl SabrModel {
                 params
             }
         }
-    }
-}
-
-impl StochasticModel for SabrModel {
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        self.get_parameters_map()
     }
 }
 

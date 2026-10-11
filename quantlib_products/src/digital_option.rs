@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -281,14 +280,6 @@ impl FinancialProduct for DigitalOption {
             .iter()
             .map(|spot| qty * self.unit_payoff_at_maturity(*spot))
             .collect()
-    }
-
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        let mut params = self.european.get_parameters();
-        params.insert("product_type".to_owned(), "digital_option".to_owned());
-        params.insert("payout".to_owned(), self.payout.to_string());
-        params.insert("payoff_type".to_owned(), self.payoff_type.to_string());
-        params
     }
 }
 

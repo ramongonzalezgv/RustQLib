@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
-
 use num_complex::Complex64;
-use quantlib_core::{QuantLibError, StochasticModel};
+use quantlib_core::QuantLibError;
 
 #[derive(Debug, Clone, Copy)]
 pub struct HestonModel {
@@ -140,20 +138,6 @@ fn principal_sqrt(z: Complex64) -> Complex64 {
 /// Principal logarithm, as `Complex64::ln`.
 fn fast_ln(z: Complex64) -> Complex64 {
     Complex64::new(0.5 * z.norm_sqr().ln(), z.arg())
-}
-
-impl StochasticModel for HestonModel {
-    fn get_parameters(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("kappa".to_owned(), self.kappa.to_string()),
-            ("theta".to_owned(), self.theta.to_string()),
-            ("sigma".to_owned(), self.sigma.to_string()),
-            ("rho".to_owned(), self.rho.to_string()),
-            ("v0".to_owned(), self.v0.to_string()),
-            ("r".to_owned(), self.r.to_string()),
-            ("q".to_owned(), self.q.to_string()),
-        ])
-    }
 }
 
 #[cfg(test)]
