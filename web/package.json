@@ -1,0 +1,27 @@
+{
+  "name": "rustqlib-playground",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "wasm": "wasm-pack build ../quantlib_wasm --release --target web --out-dir ../web/src/wasm --out-name quantlib_wasm --no-pack",
+    "wasm:dev": "wasm-pack build ../quantlib_wasm --dev --target web --out-dir ../web/src/wasm --out-name quantlib_wasm --no-pack",
+    "dev": "npm run wasm:dev && vite",
+    "build": "npm run wasm && tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node e2e/smoke.mjs"
+  },
+  "dependencies": {
+    "echarts": "^6.1.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "wasm-pack": "^0.15.0"
+  },
+  "allowScripts": {
+    "wasm-pack@0.15.0": true
+  }
+}

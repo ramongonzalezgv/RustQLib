@@ -12,6 +12,7 @@ pub use european_engine::MonteCarloEuropeanEngine;
 use quantlib_core::{PricingEngine, QuantLibError};
 use quantlib_models::{BlackScholesModel, HestonModel};
 use quantlib_products::{AmericanOption, AsianOption, DigitalOption, EuropeanOption};
+use simulators::{BlackScholesSimulator, HestonSimulator};
 
 #[derive(Debug, Clone, Copy)]
 pub struct MonteCarloEngine {
@@ -46,6 +47,51 @@ impl MonteCarloEngine {
 
     pub fn validate(&self) -> Result<(), QuantLibError> {
         self.config().validate()
+    }
+
+    /// Simulates `n_paths` full spot paths of `n_steps + 1` points each
+    /// (including `spot` at t = 0) under Black–Scholes. Meant for plotting and
+    /// diagnostics; pricing uses the engines, which do not keep the paths.
+    pub fn sample_paths_black_scholes(
+        &self,
+        spot: f64,
+        model: &BlackScholesModel,
+        ttm: f64,
+    ) -> Result<Vec<Vec<f64>>, QuantLibError> {
+        self.validate_path_inputs(spot, ttm)?;
+        model.validate()?;
+        let config = self.config();
+        let mut rng = config.rng();
+        Ok(BlackScholesSimulator::new(config).simulate_paths(spot, model, ttm, &mut rng))
+    }
+
+    /// Heston counterpart of [`Self::sample_paths_black_scholes`].
+    pub fn sample_paths_heston(
+        &self,
+        spot: f64,
+        model: &HestonModel,
+        ttm: f64,
+    ) -> Result<Vec<Vec<f64>>, QuantLibError> {
+        self.validate_path_inputs(spot, ttm)?;
+        model.validate()?;
+        let config = self.config();
+        let mut rng = config.rng();
+        Ok(HestonSimulator::new(config).simulate_paths(spot, model, ttm, &mut rng))
+    }
+
+    fn validate_path_inputs(&self, spot: f64, ttm: f64) -> Result<(), QuantLibError> {
+        self.validate()?;
+        if !(spot.is_finite() && spot > 0.0) {
+            return Err(QuantLibError::Validation(
+                "spot must be finite and positive".to_owned(),
+            ));
+        }
+        if !(ttm.is_finite() && ttm > 0.0) {
+            return Err(QuantLibError::Validation(
+                "time to maturity must be finite and positive".to_owned(),
+            ));
+        }
+        Ok(())
     }
 
     fn config(&self) -> MonteCarloConfig {

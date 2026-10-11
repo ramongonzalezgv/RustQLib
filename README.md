@@ -19,6 +19,7 @@ This repository also includes **Python bindings** (`quantlib_py`) for high-throu
 - [`quantlib_utils`](./quantlib_utils/README.md): utilities (calibration engines, objective functions, model calibrators)
 - [`quantlib_examples`](./quantlib_examples/README.md): small runnable examples
 - [`quantlib_py`](./quantlib_py/README.md): PyO3 bindings (functions + OO “engine” classes) and notebooks
+- [`quantlib_wasm`](./web/README.md) + [`web`](./web/README.md): WebAssembly build and browser pricing playground
 
 ## Quickstart (Rust)
 
@@ -75,6 +76,15 @@ python -c "import quantlib_py as ql; print(ql.__doc__)"
 ```
 
 See [`quantlib_py`](./quantlib_py/README.md) for a detailed API snapshot and NumPy batch guidance.
+
+## Pricing playground (browser)
+
+[`web/`](./web/README.md) is a browser UI that prices single options with this library compiled to WebAssembly: all engines side by side, payoff, Monte Carlo path and vol-smile charts, and shareable links.
+
+```bash
+rustup target add wasm32-unknown-unknown
+cd web && npm install && npm run dev
+```
 
 ## Design overview
 

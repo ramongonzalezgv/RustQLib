@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# wasm-pack output, rebuilt by `npm run wasm`
+src/wasm/
+e2e/out/

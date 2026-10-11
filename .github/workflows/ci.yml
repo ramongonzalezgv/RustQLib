@@ -55,3 +55,34 @@ jobs:
           VIRTUAL_ENV=.venv PATH=.venv/bin:$PATH maturin develop --release -m quantlib_py/Cargo.toml
       - name: Test
         run: .venv/bin/python -m pytest -q quantlib_py/tests
+
+  web:
+    name: WASM + web playground
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Clippy (wasm32)
+        run: cargo clippy -p quantlib_wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
+      - name: WASM tests (Node)
+        run: npx wasm-pack test --node ../quantlib_wasm
+      - name: Build (wasm-pack + tsc + vite)
+        run: npm run build
+      - name: Browser smoke test
+        run: |
+          npx playwright install --with-deps chromium
+          npm run smoke

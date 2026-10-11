@@ -8,6 +8,7 @@ members = [
   "quantlib_utils",
   "quantlib_examples",
   "quantlib_py",
+  "quantlib_wasm",
 ]
 resolver = "2"
 
