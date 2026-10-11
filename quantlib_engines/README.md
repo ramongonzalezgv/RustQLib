@@ -15,10 +15,17 @@ Engines implement `quantlib_core::PricingEngine<P, M>` for supported combination
     - `DigitalOption` under `BlackScholesModel`, `BlackModel`
   - Returns `QuantLibError::Engine` for unsupported pairs (e.g. Asian/American under analytical)
 - **`FFTEngine`**
-  - FFT-based European option pricing using characteristic functions:
-    - `EuropeanOption` under `BlackScholesModel`, `BlackModel`, `HestonModel`, `BatesModel`, `KouModel`
-  - Configurable grid:
-    - `n` (FFT size), `b` (integration bound), `interp` (`InterpolationKind::{Linear,Cubic}`)
+  - Lewis/Carr–Madan FFT pricing of `EuropeanOption` under any `quantlib_models::FourierModel`
+    (`BlackScholesModel`, `BlackModel`, `HestonModel`, `BatesModel`, `KouModel`)
+  - Configurable grid: `n` (FFT size), `b` (integration bound), `interp`
+    (`InterpolationKind::Linear`, or `Cubic`: local 8-point Lagrange)
+  - The FFT plan and quadrature arrays are built once in `FFTEngine::new`; clones share them
+  - `price_strip(model, spot, ttm, strikes, types)` prices many strikes at one exact maturity
+    from a single FFT
+- **`CosEngine`**
+  - Fang–Oosterlee COS pricing for the same models; `CosEngine { n: 256, l: 12.0 }` by default
+  - Best for single strikes or short strike lists (about 14× faster than the 4096-point FFT for
+    one Heston price); also has `price_strip`
 - **`MonteCarloEngine`**
   - A facade that delegates to specialized engines:
     - `MonteCarloEuropeanEngine`
@@ -36,7 +43,7 @@ Engines implement `quantlib_core::PricingEngine<P, M>` for supported combination
 All key engines are re-exported from the crate root:
 
 ```rust
-use quantlib_engines::{AnalyticalEngine, FFTEngine, MonteCarloEngine, BinomialEngine};
+use quantlib_engines::{AnalyticalEngine, BinomialEngine, CosEngine, FFTEngine, MonteCarloEngine};
 ```
 
 ## Usage examples
@@ -68,11 +75,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### FFT pricing (European, Heston)
+### Fourier pricing (European, Heston)
 
 ```rust
 use quantlib_core::{OptionType, PricingEngine, SimpleDate};
-use quantlib_engines::FFTEngine;
+use quantlib_engines::{CosEngine, FFTEngine};
 use quantlib_models::HestonModel;
 use quantlib_products::EuropeanOption;
 
@@ -91,6 +98,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let engine = FFTEngine::default(); // or FFTEngine::new(n, b, interp)?
     let price = engine.calculate_price(&option, &model)?;
     println!("price={price}");
+
+    // Single strikes are cheaper with COS; strips share one CF sweep.
+    let cos_price = CosEngine::default().calculate_price(&option, &model)?;
+    let strip = engine.price_strip(&model, 100.0, 1.0, &[90.0, 100.0, 110.0], &[OptionType::Call; 3])?;
+    println!("cos={cos_price}, strip={strip:?}");
     Ok(())
 }
 ```

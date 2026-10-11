@@ -201,6 +201,9 @@ Object-oriented API for advanced use cases:
   
 - **`FFTEngine`**: FFT-based European option pricing
   - Methods: `price_european_bs*`, `price_european_black*`, `price_european_heston*`, `price_european_bates*`, `price_european_kou*`
+
+- **`CosEngine(n=256, l=12.0)`**: Fang–Oosterlee COS pricing, much faster than FFT for single strikes
+  - Methods: same as `FFTEngine`
   
 - **`MonteCarloEngine`**: Path simulation-based pricing
   - Methods: `price_european_*`, `price_digital_*`, `price_asian_*`

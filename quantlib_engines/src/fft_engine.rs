@@ -1,15 +1,21 @@
 use core::f64::consts::PI;
 use core::str::FromStr;
+use std::fmt;
+use std::sync::Arc;
 
 use num_complex::Complex64;
 use quantlib_core::{OptionType, PricingEngine, QuantLibError};
-use quantlib_models::{BatesModel, BlackModel, BlackScholesModel, HestonModel, KouModel};
+use quantlib_models::FourierModel;
 use quantlib_products::EuropeanOption;
-use rustfft::FftPlanner;
+use rustfft::{Fft, FftPlanner};
+
+use crate::fourier::{FourierStrip, price_european, validate_price, validate_strip};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InterpolationKind {
     Linear,
+    /// Local high-order (8-point) Lagrange on the uniform log-strike grid. It is
+    /// O(1) per strike and more accurate than the global cubic spline it replaced.
     #[default]
     Cubic,
 }
@@ -28,24 +34,57 @@ impl FromStr for InterpolationKind {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+/// Points in the local Lagrange stencil of [`InterpolationKind::Cubic`].
+const STENCIL: usize = 8;
+
+/// Lewis (2001) call price on an inverse-FFT log-strike grid.
+///
+/// The FFT plan and every model-independent quadrature array are built once in
+/// [`FFTEngine::new`] and shared between clones.
+#[derive(Clone)]
 pub struct FFTEngine {
-    pub n: usize,
-    pub b: f64,
-    pub interp: InterpolationKind,
+    n: usize,
+    b: f64,
+    interp: InterpolationKind,
+    grid: Arc<FftGrid>,
+}
+
+struct FftGrid {
+    fft: Arc<dyn Fft<f64>>,
+    /// CF arguments `x_j − i/2`.
+    nodes: Vec<Complex64>,
+    /// `(−1)^j · w_j·dx/3 / (x_j² + ¼)`: phase `e^{−i·shift·x_j}`, Simpson weight and kernel.
+    factors: Vec<f64>,
+    /// Log-strike of the first output point (`−shift`) and grid spacing.
+    k0: f64,
+    dk: f64,
+}
+
+impl fmt::Debug for FFTEngine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FFTEngine")
+            .field("n", &self.n)
+            .field("b", &self.b)
+            .field("interp", &self.interp)
+            .finish()
+    }
 }
 
 impl Default for FFTEngine {
     fn default() -> Self {
-        Self {
-            n: 1 << 12,
-            b: 200.0,
-            interp: InterpolationKind::Cubic,
-        }
+        Self::new(
+            Self::DEFAULT_N,
+            Self::DEFAULT_B,
+            InterpolationKind::default(),
+        )
+        .expect("default FFT settings are valid")
     }
 }
 
 impl FFTEngine {
+    pub const DEFAULT_N: usize = 1 << 12;
+    pub const DEFAULT_B: f64 = 200.0;
+
     pub fn new(n: usize, b: f64, interp: InterpolationKind) -> Result<Self, QuantLibError> {
         if n < 8 {
             return Err(QuantLibError::Validation("n must be >= 8".to_owned()));
@@ -54,426 +93,149 @@ impl FFTEngine {
             return Err(QuantLibError::Validation("b must be > 0".to_owned()));
         }
 
-        Ok(Self { n, b, interp })
+        let dx = b / n as f64;
+        let dk = 2.0 * PI / b;
+        // shift·x_j = π·j, so the phase factor is exactly (−1)^j.
+        let (nodes, factors) = (0..n)
+            .map(|j| {
+                let x = j as f64 * dx;
+                // Carr–Madan Simpson weights (3 + (−1)^j − δ_{j0}) / 3.
+                let (sign, simpson) = match j {
+                    0 => (1.0, 1.0),
+                    _ if j % 2 == 1 => (-1.0, 4.0),
+                    _ => (1.0, 2.0),
+                };
+                let factor = sign * simpson * dx / 3.0 / (x * x + 0.25);
+                (Complex64::new(x, -0.5), factor)
+            })
+            .unzip();
+
+        let grid = FftGrid {
+            fft: FftPlanner::<f64>::new().plan_fft_inverse(n),
+            nodes,
+            factors,
+            k0: -(n as f64) * dk / 2.0,
+            dk,
+        };
+
+        Ok(Self {
+            n,
+            b,
+            interp,
+            grid: Arc::new(grid),
+        })
     }
 
-    fn intrinsic(option_type: OptionType, spot_or_forward: f64, strike: f64) -> f64 {
-        match option_type {
-            OptionType::Call => (spot_or_forward - strike).max(0.0),
-            OptionType::Put => (strike - spot_or_forward).max(0.0),
-        }
+    pub fn n(&self) -> usize {
+        self.n
     }
 
-    fn simpson_weight(index: usize, n: usize) -> f64 {
-        if index == 0 || index + 1 == n {
-            1.0
-        } else if index.is_multiple_of(2) {
-            2.0
-        } else {
-            4.0
-        }
+    pub fn b(&self) -> f64 {
+        self.b
     }
 
-    fn fft_integral_grid<F>(
+    pub fn interp(&self) -> InterpolationKind {
+        self.interp
+    }
+
+    /// Unit prices for many strikes at one exact maturity: one CF sweep and one
+    /// FFT, then an O(1) interpolation per strike. For forward-quoted models
+    /// (Black-76) `spot` is the forward.
+    pub fn price_strip<M: FourierModel>(
         &self,
-        characteristic_fn: F,
-    ) -> Result<(Vec<f64>, Vec<f64>), QuantLibError>
-    where
-        F: Fn(Complex64) -> Complex64,
-    {
-        let n_as_f64 = self.n as f64;
-        let dx = self.b / n_as_f64;
-        let dk = 2.0 * PI / self.b;
-        let shift = n_as_f64 * dk / 2.0;
-
-        let mut integrand = vec![Complex64::new(0.0, 0.0); self.n];
-        for (index, value) in integrand.iter_mut().enumerate() {
-            let x = index as f64 * dx;
-            let weight = Self::simpson_weight(index, self.n);
-            let u = Complex64::new(x, -0.5);
-            let phi = characteristic_fn(u);
-            let kernel = phi / (x * x + 0.25);
-            let phase = Complex64::new(0.0, -shift * x).exp();
-
-            *value = phase * kernel * (weight * dx / 3.0);
-        }
-
-        let mut planner = FftPlanner::<f64>::new();
-        let inverse_fft = planner.plan_fft_inverse(self.n);
-        inverse_fft.process(&mut integrand);
-
-        let mut ks = Vec::with_capacity(self.n);
-        let mut values = Vec::with_capacity(self.n);
-        for (index, item) in integrand.into_iter().enumerate() {
-            ks.push(-shift + dk * index as f64);
-            values.push(item.re);
-        }
-
-        Ok((ks, values))
-    }
-
-    fn black_scholes_characteristic(
-        model: &BlackScholesModel,
+        model: &M,
+        spot: f64,
         ttm: f64,
-        u: Complex64,
-    ) -> Complex64 {
-        let i = Complex64::new(0.0, 1.0);
-        let sigma_sq = model.sigma * model.sigma;
-        let drift = (model.r - model.q - 0.5 * sigma_sq) * ttm;
-        (i * u * drift - 0.5 * u * u * sigma_sq * ttm).exp()
+        strikes: &[f64],
+        types: &[OptionType],
+    ) -> Result<Vec<f64>, QuantLibError> {
+        validate_strip(model, spot, ttm, strikes, types)?;
+        self.strip(model, spot, ttm, strikes, types)
     }
 
-    fn black_characteristic(model: &BlackModel, forward: f64, ttm: f64, u: Complex64) -> Complex64 {
-        let i = Complex64::new(0.0, 1.0);
-        let sigma_sq = model.sigma * model.sigma;
-        (i * u * forward.ln() - 0.5 * u * u * sigma_sq * ttm).exp()
-    }
+    /// Lewis integral `∫ Re[e^{−iuk} φ(u − i/2)] / (u² + ¼) du` on the log-strike grid.
+    fn integral_grid<M: FourierModel>(&self, model: &M, ttm: f64) -> Vec<f64> {
+        let grid = &*self.grid;
+        let fft = &grid.fft;
+        let mut buffer = vec![Complex64::new(0.0, 0.0); self.n + fft.get_inplace_scratch_len()];
+        let (values, scratch) = buffer.split_at_mut(self.n);
 
-    fn interpolate_at(&self, xs: &[f64], ys: &[f64], x: f64) -> Result<f64, QuantLibError> {
-        if xs.len() != ys.len() || xs.len() < 2 {
-            return Err(QuantLibError::Engine(
-                "invalid interpolation grid".to_owned(),
-            ));
+        for ((value, &u), &factor) in values.iter_mut().zip(&grid.nodes).zip(&grid.factors) {
+            *value = model.log_return_cf(u, ttm) * factor;
         }
+        fft.process_with_scratch(values, scratch);
 
-        if x < xs[0] || x > xs[xs.len() - 1] {
+        buffer.truncate(self.n);
+        buffer.into_iter().map(|value| value.re).collect()
+    }
+
+    /// Interpolates the integral grid at log-moneyness `k`; allocation-free and O(1).
+    fn interpolate(&self, values: &[f64], k: f64) -> Result<f64, QuantLibError> {
+        let FftGrid { k0, dk, .. } = *self.grid;
+        let k_max = k0 + dk * (self.n - 1) as f64;
+        if !(k0..=k_max).contains(&k) {
             return Err(QuantLibError::Engine(format!(
-                "log-moneyness {x} is outside FFT interpolation domain [{}, {}]",
-                xs[0],
-                xs[xs.len() - 1]
+                "log-moneyness {k} is outside FFT interpolation domain [{k0}, {k_max}]"
             )));
         }
 
-        if (x - xs[0]).abs() <= f64::EPSILON {
-            return Ok(ys[0]);
-        }
-        if (x - xs[xs.len() - 1]).abs() <= f64::EPSILON {
-            return Ok(ys[ys.len() - 1]);
-        }
-
+        let position = (k - k0) / dk;
         match self.interp {
-            InterpolationKind::Linear => linear_interpolate(xs, ys, x),
-            InterpolationKind::Cubic => cubic_spline_interpolate(xs, ys, x),
+            InterpolationKind::Linear => {
+                let i = (position.floor() as usize).min(self.n - 2);
+                let t = position - i as f64;
+                Ok(values[i] + t * (values[i + 1] - values[i]))
+            }
+            InterpolationKind::Cubic => {
+                // Nodes centred on the bracketing interval, clamped inside the grid.
+                let i =
+                    (position.floor() as usize).clamp(STENCIL / 2 - 1, self.n - 1 - STENCIL / 2);
+                let start = i + 1 - STENCIL / 2;
+                let t = position - start as f64;
+                let mut value = 0.0;
+                for a in 0..STENCIL {
+                    let mut weight = 1.0;
+                    for b in (0..STENCIL).filter(|&b| b != a) {
+                        weight *= (t - b as f64) / (a as f64 - b as f64);
+                    }
+                    value += weight * values[start + a];
+                }
+                Ok(value)
+            }
         }
-    }
-
-    fn validate_price(price: f64) -> Result<f64, QuantLibError> {
-        if !price.is_finite() {
-            return Err(QuantLibError::Engine(
-                "FFT pricing produced a non-finite result".to_owned(),
-            ));
-        }
-        Ok(price)
     }
 }
 
-impl PricingEngine<EuropeanOption, HestonModel> for FFTEngine {
-    fn calculate_price(
+impl FourierStrip for FFTEngine {
+    fn strip<M: FourierModel>(
         &self,
-        product: &EuropeanOption,
-        model: &HestonModel,
-    ) -> Result<f64, QuantLibError> {
-        product.validate()?;
-        model.validate()?;
+        model: &M,
+        spot: f64,
+        ttm: f64,
+        strikes: &[f64],
+        types: &[OptionType],
+    ) -> Result<Vec<f64>, QuantLibError> {
+        let values = self.integral_grid(model, ttm);
+        let discount = (-model.rate() * ttm).exp();
+        let discounted_spot = spot * (-model.dividend_yield() * ttm).exp();
 
-        let spot = product.require_spot()?;
-        let ttm = product.ttm();
-
-        if ttm <= 0.0 {
-            return Ok(
-                Self::intrinsic(product.option_type, spot, product.k) * f64::from(product.qty)
-            );
-        }
-
-        if product.k <= 0.0 {
-            let unit_price = match product.option_type {
-                OptionType::Call => spot * (-(model.q) * ttm).exp(),
-                OptionType::Put => 0.0,
+        // Sized up front: a `Result` collect cannot pre-size and would regrow.
+        let mut prices = Vec::with_capacity(strikes.len());
+        for (&strike, &option_type) in strikes.iter().zip(types) {
+            let integral = self.interpolate(&values, (spot / strike).ln())?;
+            let call = discounted_spot - (spot * strike).sqrt() * discount * integral / PI;
+            let price = match option_type {
+                OptionType::Call => call,
+                OptionType::Put => call + strike * discount - discounted_spot,
             };
-            return Ok(unit_price * f64::from(product.qty));
+            prices.push(validate_price(price, "FFT")?);
         }
-
-        let log_moneyness = (spot / product.k).ln();
-        let (ks, integral_grid) =
-            self.fft_integral_grid(|u| model.characteristic_function(u, ttm))?;
-        let integral_value = self.interpolate_at(&ks, &integral_grid, log_moneyness)?;
-
-        let discounted_spot = spot * (-(model.q) * ttm).exp();
-        let discounted_strike = product.k * (-(model.r) * ttm).exp();
-
-        let mut call_price = discounted_spot
-            - (spot * product.k).sqrt() * (-(model.r) * ttm).exp() * integral_value / PI;
-
-        if product.option_type == OptionType::Put {
-            call_price += discounted_strike - discounted_spot;
-        }
-
-        Self::validate_price(call_price * f64::from(product.qty))
+        Ok(prices)
     }
 }
 
-impl PricingEngine<EuropeanOption, BatesModel> for FFTEngine {
-    fn calculate_price(
-        &self,
-        product: &EuropeanOption,
-        model: &BatesModel,
-    ) -> Result<f64, QuantLibError> {
-        product.validate()?;
-        model.validate()?;
-
-        let spot = product.require_spot()?;
-        let ttm = product.ttm();
-
-        if ttm <= 0.0 {
-            return Ok(
-                Self::intrinsic(product.option_type, spot, product.k) * f64::from(product.qty)
-            );
-        }
-
-        if product.k <= 0.0 {
-            let unit_price = match product.option_type {
-                OptionType::Call => spot * (-(model.q) * ttm).exp(),
-                OptionType::Put => 0.0,
-            };
-            return Ok(unit_price * f64::from(product.qty));
-        }
-
-        let log_moneyness = (spot / product.k).ln();
-        let (ks, integral_grid) =
-            self.fft_integral_grid(|u| model.characteristic_function(u, ttm))?;
-        let integral_value = self.interpolate_at(&ks, &integral_grid, log_moneyness)?;
-
-        let discounted_spot = spot * (-(model.q) * ttm).exp();
-        let discounted_strike = product.k * (-(model.r) * ttm).exp();
-
-        let mut call_price = discounted_spot
-            - (spot * product.k).sqrt() * (-(model.r) * ttm).exp() * integral_value / PI;
-
-        if product.option_type == OptionType::Put {
-            call_price += discounted_strike - discounted_spot;
-        }
-
-        Self::validate_price(call_price * f64::from(product.qty))
+impl<M: FourierModel> PricingEngine<EuropeanOption, M> for FFTEngine {
+    fn calculate_price(&self, product: &EuropeanOption, model: &M) -> Result<f64, QuantLibError> {
+        price_european(self, product, model)
     }
-}
-
-impl PricingEngine<EuropeanOption, KouModel> for FFTEngine {
-    fn calculate_price(
-        &self,
-        product: &EuropeanOption,
-        model: &KouModel,
-    ) -> Result<f64, QuantLibError> {
-        product.validate()?;
-        model.validate()?;
-
-        let spot = product.require_spot()?;
-        let ttm = product.ttm();
-
-        if ttm <= 0.0 {
-            return Ok(
-                Self::intrinsic(product.option_type, spot, product.k) * f64::from(product.qty)
-            );
-        }
-
-        if product.k <= 0.0 {
-            let unit_price = match product.option_type {
-                OptionType::Call => spot * (-(model.q) * ttm).exp(),
-                OptionType::Put => 0.0,
-            };
-            return Ok(unit_price * f64::from(product.qty));
-        }
-
-        let log_moneyness = (spot / product.k).ln();
-        let (ks, integral_grid) =
-            self.fft_integral_grid(|u| model.characteristic_function(u, ttm))?;
-        let integral_value = self.interpolate_at(&ks, &integral_grid, log_moneyness)?;
-
-        let discounted_spot = spot * (-(model.q) * ttm).exp();
-        let discounted_strike = product.k * (-(model.r) * ttm).exp();
-
-        let mut call_price = discounted_spot
-            - (spot * product.k).sqrt() * (-(model.r) * ttm).exp() * integral_value / PI;
-
-        if product.option_type == OptionType::Put {
-            call_price += discounted_strike - discounted_spot;
-        }
-
-        Self::validate_price(call_price * f64::from(product.qty))
-    }
-}
-
-impl PricingEngine<EuropeanOption, BlackScholesModel> for FFTEngine {
-    fn calculate_price(
-        &self,
-        product: &EuropeanOption,
-        model: &BlackScholesModel,
-    ) -> Result<f64, QuantLibError> {
-        product.validate()?;
-        model.validate()?;
-
-        let spot = product.require_spot()?;
-        let ttm = product.ttm();
-
-        if ttm <= 0.0 {
-            return Ok(
-                Self::intrinsic(product.option_type, spot, product.k) * f64::from(product.qty)
-            );
-        }
-
-        if product.k <= 0.0 {
-            let unit_price = match product.option_type {
-                OptionType::Call => spot * (-(model.q) * ttm).exp(),
-                OptionType::Put => 0.0,
-            };
-            return Ok(unit_price * f64::from(product.qty));
-        }
-
-        let log_moneyness = (spot / product.k).ln();
-        let (ks, integral_grid) =
-            self.fft_integral_grid(|u| Self::black_scholes_characteristic(model, ttm, u))?;
-        let integral_value = self.interpolate_at(&ks, &integral_grid, log_moneyness)?;
-
-        let discounted_spot = spot * (-(model.q) * ttm).exp();
-        let discounted_strike = product.k * (-(model.r) * ttm).exp();
-
-        let mut call_price = discounted_spot
-            - (spot * product.k).sqrt() * (-(model.r) * ttm).exp() * integral_value / PI;
-
-        if product.option_type == OptionType::Put {
-            call_price += discounted_strike - discounted_spot;
-        }
-
-        Self::validate_price(call_price * f64::from(product.qty))
-    }
-}
-
-impl PricingEngine<EuropeanOption, BlackModel> for FFTEngine {
-    fn calculate_price(
-        &self,
-        product: &EuropeanOption,
-        model: &BlackModel,
-    ) -> Result<f64, QuantLibError> {
-        product.validate()?;
-        model.validate()?;
-
-        let forward = product.require_forward()?;
-        let ttm = product.ttm();
-
-        if ttm <= 0.0 {
-            return Ok(
-                Self::intrinsic(product.option_type, forward, product.k) * f64::from(product.qty)
-            );
-        }
-
-        if product.k <= 0.0 {
-            let unit_price = match product.option_type {
-                OptionType::Call => forward * (-(model.r) * ttm).exp(),
-                OptionType::Put => 0.0,
-            };
-            return Ok(unit_price * f64::from(product.qty));
-        }
-
-        let log_moneyness = (forward / product.k).ln();
-        let (ks, integral_grid) =
-            self.fft_integral_grid(|u| Self::black_characteristic(model, forward, ttm, u))?;
-        let integral_value = self.interpolate_at(&ks, &integral_grid, log_moneyness)?;
-
-        let discount = (-(model.r) * ttm).exp();
-        let mut call_price =
-            discount * (forward - (forward * product.k).sqrt() * integral_value / PI);
-
-        if product.option_type == OptionType::Put {
-            call_price += discount * (product.k - forward);
-        }
-
-        Self::validate_price(call_price * f64::from(product.qty))
-    }
-}
-
-fn linear_interpolate(xs: &[f64], ys: &[f64], x: f64) -> Result<f64, QuantLibError> {
-    let idx = locate_interval(xs, x)?;
-    let x0 = xs[idx];
-    let x1 = xs[idx + 1];
-    let y0 = ys[idx];
-    let y1 = ys[idx + 1];
-
-    let width = x1 - x0;
-    if width <= 0.0 {
-        return Err(QuantLibError::Engine(
-            "FFT interpolation grid must be strictly increasing".to_owned(),
-        ));
-    }
-
-    Ok(y0 + (x - x0) / width * (y1 - y0))
-}
-
-fn cubic_spline_interpolate(xs: &[f64], ys: &[f64], x: f64) -> Result<f64, QuantLibError> {
-    let n = xs.len();
-    if n < 3 {
-        return linear_interpolate(xs, ys, x);
-    }
-
-    let mut h = vec![0.0; n - 1];
-    for i in 0..(n - 1) {
-        h[i] = xs[i + 1] - xs[i];
-        if h[i] <= 0.0 {
-            return Err(QuantLibError::Engine(
-                "FFT interpolation grid must be strictly increasing".to_owned(),
-            ));
-        }
-    }
-
-    let mut alpha = vec![0.0; n];
-    for i in 1..(n - 1) {
-        alpha[i] = 3.0 / h[i] * (ys[i + 1] - ys[i]) - 3.0 / h[i - 1] * (ys[i] - ys[i - 1]);
-    }
-
-    let mut l = vec![0.0; n];
-    let mut mu = vec![0.0; n];
-    let mut z = vec![0.0; n];
-    l[0] = 1.0;
-
-    for i in 1..(n - 1) {
-        l[i] = 2.0 * (xs[i + 1] - xs[i - 1]) - h[i - 1] * mu[i - 1];
-        if l[i].abs() <= 1.0e-14 {
-            return Err(QuantLibError::Engine(
-                "cubic spline system is ill-conditioned".to_owned(),
-            ));
-        }
-
-        mu[i] = h[i] / l[i];
-        z[i] = (alpha[i] - h[i - 1] * z[i - 1]) / l[i];
-    }
-
-    l[n - 1] = 1.0;
-
-    let mut b = vec![0.0; n - 1];
-    let mut c = vec![0.0; n];
-    let mut d = vec![0.0; n - 1];
-
-    for j in (0..=(n - 2)).rev() {
-        c[j] = z[j] - mu[j] * c[j + 1];
-        b[j] = (ys[j + 1] - ys[j]) / h[j] - h[j] * (c[j + 1] + 2.0 * c[j]) / 3.0;
-        d[j] = (c[j + 1] - c[j]) / (3.0 * h[j]);
-    }
-
-    let idx = locate_interval(xs, x)?;
-    let dx = x - xs[idx];
-
-    Ok(ys[idx] + b[idx] * dx + c[idx] * dx * dx + d[idx] * dx * dx * dx)
-}
-
-fn locate_interval(xs: &[f64], x: f64) -> Result<usize, QuantLibError> {
-    if xs.len() < 2 {
-        return Err(QuantLibError::Engine(
-            "FFT interpolation grid requires at least 2 points".to_owned(),
-        ));
-    }
-
-    let idx = match xs.binary_search_by(|value| value.total_cmp(&x)) {
-        Ok(exact) => exact.min(xs.len() - 2),
-        Err(insert) => insert.saturating_sub(1).min(xs.len() - 2),
-    };
-
-    Ok(idx)
 }

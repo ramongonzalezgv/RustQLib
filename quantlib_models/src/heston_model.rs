@@ -98,20 +98,48 @@ impl HestonModel {
             return (i * u * drift - 0.5 * (u * u + i * u) * integrated_variance).exp();
         }
 
-        let drift = self.kappa - self.rho * self.sigma * u * i;
-        let d = ((self.rho * self.sigma * u * i - self.kappa).powu(2) + sigma_sq * (u * i + u * u))
-            .sqrt();
-        let g = (drift - d) / (drift + d);
+        // Same formulation as before with g = (drift − d)/(drift + d) eliminated,
+        // which removes two complex divisions from the inner FFT/COS loop.
+        let iu = i * u;
+        let drift = self.kappa - self.rho * self.sigma * iu;
+        let d = principal_sqrt(drift * drift + sigma_sq * (iu + u * u));
+        let (minus, plus) = (drift - d, drift + d);
         let exp_dt = (-d * ttm).exp();
-        let g_term = (Complex64::new(1.0, 0.0) - g * exp_dt) / (Complex64::new(1.0, 0.0) - g);
+        // (drift + d)·(1 − g·e^{−dT})
+        let denom = plus - minus * exp_dt;
+        // (1 − g·e^{−dT}) / (1 − g)
+        let g_term = denom / (2.0 * d);
 
-        let c = (self.r - self.q) * u * i * ttm
-            + (self.kappa * self.theta / sigma_sq) * ((drift - d) * ttm - 2.0 * g_term.ln());
-        let d_term = ((drift - d) / sigma_sq)
-            * ((Complex64::new(1.0, 0.0) - exp_dt) / (Complex64::new(1.0, 0.0) - g * exp_dt));
+        let c = (self.r - self.q) * iu * ttm
+            + (self.kappa * self.theta / sigma_sq) * (minus * ttm - 2.0 * fast_ln(g_term));
+        let d_term = (minus / sigma_sq) * ((1.0 - exp_dt) * plus / denom);
 
         (c + d_term * self.v0).exp()
     }
+}
+
+// The helpers below take |z| from `norm_sqr` rather than `hypot`, which is
+// slow in most libms. Heston CF arguments stay far from the f64 overflow range.
+
+/// Principal square root without the polar round trip (`atan2` + `sin_cos`)
+/// that `Complex64::sqrt` takes; same branch cut along the negative real axis.
+fn principal_sqrt(z: Complex64) -> Complex64 {
+    let r = z.norm_sqr().sqrt();
+    if r == 0.0 {
+        return Complex64::new(0.0, z.im);
+    }
+    if z.re >= 0.0 {
+        let t = (0.5 * (r + z.re)).sqrt();
+        Complex64::new(t, z.im / (2.0 * t))
+    } else {
+        let t = (0.5 * (r - z.re)).sqrt();
+        Complex64::new(z.im.abs() / (2.0 * t), t.copysign(z.im))
+    }
+}
+
+/// Principal logarithm, as `Complex64::ln`.
+fn fast_ln(z: Complex64) -> Complex64 {
+    Complex64::new(0.5 * z.norm_sqr().ln(), z.arg())
 }
 
 impl StochasticModel for HestonModel {
@@ -162,6 +190,28 @@ mod tests {
             "phi={phi:?}, expected={expected}"
         );
         assert!(phi.im.abs() < 1.0e-10, "phi={phi:?}");
+    }
+
+    #[test]
+    fn principal_sqrt_matches_num_complex() {
+        for &(re, im) in &[
+            (3.0, 4.0),
+            (-3.0, 4.0),
+            (-3.0, -4.0),
+            (3.0, -4.0),
+            (-2.0, 0.0),
+            (-2.0, -0.0),
+            (1.0e-30, 1.0e30),
+            (0.0, -5.0),
+        ] {
+            let z = Complex64::new(re, im);
+            let (ours, theirs) = (super::principal_sqrt(z), z.sqrt());
+            assert!(
+                (ours - theirs).norm() <= 1.0e-15 * theirs.norm(),
+                "z={z:?}: ours={ours:?}, num_complex={theirs:?}"
+            );
+            assert_eq!(ours.im.is_sign_negative(), theirs.im.is_sign_negative());
+        }
     }
 
     #[test]

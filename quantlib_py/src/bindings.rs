@@ -6,8 +6,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyModule;
 use quantlib_core::{OptionType, PricingEngine, QuantLibError, SimpleDate};
 use quantlib_engines::{
-    AnalyticalEngine, FFTEngine as RustFFTEngine, InterpolationKind, MonteCarloEngine,
-    calculate_prices_parallel, calculate_prices_parallel_per_model,
+    AnalyticalEngine, CosEngine as RustCosEngine, FFTEngine as RustFFTEngine, InterpolationKind,
+    MonteCarloEngine, calculate_prices_parallel, calculate_prices_parallel_per_model,
 };
 use quantlib_models::{BatesModel, BlackModel, BlackScholesModel, HestonModel, KouModel};
 use quantlib_products::{
@@ -1172,10 +1172,9 @@ impl PyAnalyticalEngine {
 }
 
 #[pyclass(module = "quantlib_py", name = "FFTEngine", from_py_object)]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct PyFFTEngine {
     pub(crate) inner: RustFFTEngine,
-    interp: InterpolationKind,
 }
 
 #[pymethods]
@@ -1185,7 +1184,217 @@ impl PyFFTEngine {
     fn new(n: usize, b: f64, interp: &str) -> PyResult<Self> {
         let interp = parse_fft_interpolation(interp)?;
         let inner = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
-        Ok(Self { inner, interp })
+        Ok(Self { inner })
+    }
+
+    #[getter]
+    fn n(&self) -> usize {
+        self.inner.n()
+    }
+
+    #[getter]
+    fn b(&self) -> f64 {
+        self.inner.b()
+    }
+
+    #[getter]
+    fn interp(&self) -> &'static str {
+        match self.inner.interp() {
+            InterpolationKind::Linear => "linear",
+            InterpolationKind::Cubic => "cubic",
+        }
+    }
+
+    fn price_european_heston(
+        &self,
+        py: Python<'_>,
+        option: &PyEuropeanOptionSpot,
+        model: &PyHestonModel,
+    ) -> PyResult<f64> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || engine.calculate_price(&option, &model))
+            .map_err(to_py_err)
+    }
+
+    fn price_european_bates(
+        &self,
+        py: Python<'_>,
+        option: &PyEuropeanOptionSpot,
+        model: &PyBatesModel,
+    ) -> PyResult<f64> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || engine.calculate_price(&option, &model))
+            .map_err(to_py_err)
+    }
+
+    fn price_european_kou(
+        &self,
+        py: Python<'_>,
+        option: &PyEuropeanOptionSpot,
+        model: &PyKouModel,
+    ) -> PyResult<f64> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || engine.calculate_price(&option, &model))
+            .map_err(to_py_err)
+    }
+
+    fn price_european_bs(
+        &self,
+        py: Python<'_>,
+        option: &PyEuropeanOptionSpot,
+        model: &PyBlackScholesModel,
+    ) -> PyResult<f64> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || engine.calculate_price(&option, &model))
+            .map_err(to_py_err)
+    }
+
+    #[pyo3(signature = (options, model, parallel_batch = true))]
+    fn price_european_bs_batch(
+        &self,
+        py: Python<'_>,
+        options: Vec<Py<PyEuropeanOptionSpot>>,
+        model: &PyBlackScholesModel,
+        parallel_batch: bool,
+    ) -> PyResult<Vec<f64>> {
+        let products = options
+            .into_iter()
+            .map(|option| option.borrow(py).inner.clone())
+            .collect::<Vec<_>>();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
+    }
+
+    fn price_european_black(
+        &self,
+        py: Python<'_>,
+        option: &PyEuropeanOptionForward,
+        model: &PyBlackModel,
+    ) -> PyResult<f64> {
+        let option = option.inner.clone();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || engine.calculate_price(&option, &model))
+            .map_err(to_py_err)
+    }
+
+    #[pyo3(signature = (options, model, parallel_batch = true))]
+    fn price_european_black_batch(
+        &self,
+        py: Python<'_>,
+        options: Vec<Py<PyEuropeanOptionForward>>,
+        model: &PyBlackModel,
+        parallel_batch: bool,
+    ) -> PyResult<Vec<f64>> {
+        let products = options
+            .into_iter()
+            .map(|option| option.borrow(py).inner.clone())
+            .collect::<Vec<_>>();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
+    }
+
+    #[pyo3(signature = (options, model, parallel_batch = true))]
+    fn price_european_heston_batch(
+        &self,
+        py: Python<'_>,
+        options: Vec<Py<PyEuropeanOptionSpot>>,
+        model: &PyHestonModel,
+        parallel_batch: bool,
+    ) -> PyResult<Vec<f64>> {
+        let products = options
+            .into_iter()
+            .map(|option| option.borrow(py).inner.clone())
+            .collect::<Vec<_>>();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
+    }
+
+    #[pyo3(signature = (options, model, parallel_batch = true))]
+    fn price_european_bates_batch(
+        &self,
+        py: Python<'_>,
+        options: Vec<Py<PyEuropeanOptionSpot>>,
+        model: &PyBatesModel,
+        parallel_batch: bool,
+    ) -> PyResult<Vec<f64>> {
+        let products = options
+            .into_iter()
+            .map(|option| option.borrow(py).inner.clone())
+            .collect::<Vec<_>>();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
+    }
+
+    #[pyo3(signature = (options, model, parallel_batch = true))]
+    fn price_european_kou_batch(
+        &self,
+        py: Python<'_>,
+        options: Vec<Py<PyEuropeanOptionSpot>>,
+        model: &PyKouModel,
+        parallel_batch: bool,
+    ) -> PyResult<Vec<f64>> {
+        let products = options
+            .into_iter()
+            .map(|option| option.borrow(py).inner.clone())
+            .collect::<Vec<_>>();
+        let model = model.inner;
+        let engine = self.inner.clone();
+
+        py.detach(move || price_products_single_model(engine, products, model, parallel_batch))
+            .map_err(to_py_err)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "FFTEngine(n={}, b={}, interp='{}')",
+            self.inner.n(),
+            self.inner.b(),
+            self.interp()
+        )
+    }
+}
+
+/// Fang–Oosterlee COS engine: much faster than FFT for single strikes or
+/// short strike lists (Greeks by bumping, calibration with scattered quotes).
+#[pyclass(module = "quantlib_py", name = "CosEngine", from_py_object)]
+#[derive(Clone, Copy)]
+pub(crate) struct PyCosEngine {
+    pub(crate) inner: RustCosEngine,
+}
+
+#[pymethods]
+impl PyCosEngine {
+    #[new]
+    #[pyo3(signature = (n = 256, l = 12.0))]
+    fn new(n: usize, l: f64) -> PyResult<Self> {
+        let inner = RustCosEngine::new(n, l).map_err(to_py_err)?;
+        Ok(Self { inner })
     }
 
     #[getter]
@@ -1194,16 +1403,8 @@ impl PyFFTEngine {
     }
 
     #[getter]
-    fn b(&self) -> f64 {
-        self.inner.b
-    }
-
-    #[getter]
-    fn interp(&self) -> &'static str {
-        match self.interp {
-            InterpolationKind::Linear => "linear",
-            InterpolationKind::Cubic => "cubic",
-        }
+    fn l(&self) -> f64 {
+        self.inner.l
     }
 
     fn price_european_heston(
@@ -1372,12 +1573,7 @@ impl PyFFTEngine {
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "FFTEngine(n={}, b={}, interp='{}')",
-            self.inner.n,
-            self.inner.b,
-            self.interp()
-        )
+        format!("CosEngine(n={}, l={})", self.inner.n, self.inner.l)
     }
 }
 
@@ -1660,6 +1856,7 @@ pub(crate) fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyAsianOptionSpot>()?;
     m.add_class::<PyAnalyticalEngine>()?;
     m.add_class::<PyFFTEngine>()?;
+    m.add_class::<PyCosEngine>()?;
     m.add_class::<PyMonteCarloEngine>()?;
     Ok(())
 }
