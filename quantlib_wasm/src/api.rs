@@ -486,12 +486,8 @@ pub fn price_at(req: &PricingRequest, engine: EngineKind, underlying: f64) -> Ap
                     exact(AnalyticalEngine.calculate_price(&option, m))
                 }
                 (EngineKind::Fft, _) => {
-                    let fft = FFTEngine::new(
-                        s.fft_n,
-                        FFTEngine::default().b,
-                        FFTEngine::default().interp,
-                    )
-                    .map_err(err)?;
+                    let fft = FFTEngine::new(s.fft_n, FFTEngine::DEFAULT_B, Default::default())
+                        .map_err(err)?;
                     match &model {
                         Model::BlackScholes(m) => exact(fft.calculate_price(&option, m)),
                         Model::Black76(m) => exact(fft.calculate_price(&option, m)),

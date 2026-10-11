@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use quantlib_core::{OptionType, PricingEngine, SimpleDate};
-use quantlib_engines::{FFTEngine, InterpolationKind};
+use quantlib_engines::{CosEngine, FFTEngine, InterpolationKind};
 use quantlib_models::HestonModel;
 use quantlib_products::EuropeanOption;
 
@@ -126,11 +126,45 @@ fn bench_fft_deep_otm_stress(c: &mut Criterion) {
     });
 }
 
+fn bench_cos_vs_fft_single(c: &mut Criterion) {
+    let (option, model) = baseline_option_and_model();
+    let fft = FFTEngine::default();
+    let cos = CosEngine::default();
+
+    let mut group = c.benchmark_group("heston_single_price");
+    group.bench_function("fft_4096", |b| {
+        b.iter(|| black_box(fft.calculate_price(black_box(&option), black_box(&model))))
+    });
+    group.bench_function("cos_256", |b| {
+        b.iter(|| black_box(cos.calculate_price(black_box(&option), black_box(&model))))
+    });
+    group.finish();
+}
+
+fn bench_cos_vs_fft_strip(c: &mut Criterion) {
+    let (_, model) = baseline_option_and_model();
+    let fft = FFTEngine::default();
+    let cos = CosEngine::default();
+    let strikes: Vec<f64> = (0..50).map(|i| 60.0 + 2.0 * f64::from(i)).collect();
+    let types = vec![OptionType::Call; strikes.len()];
+
+    let mut group = c.benchmark_group("heston_strip_50");
+    group.bench_function("fft_4096", |b| {
+        b.iter(|| black_box(fft.price_strip(&model, 100.0, 1.0, black_box(&strikes), &types)))
+    });
+    group.bench_function("cos_256", |b| {
+        b.iter(|| black_box(cos.price_strip(&model, 100.0, 1.0, black_box(&strikes), &types)))
+    });
+    group.finish();
+}
+
 criterion_group!(
     fft_benches,
     bench_fft_resolution,
     bench_fft_bandwidth,
     bench_fft_interpolation,
-    bench_fft_deep_otm_stress
+    bench_fft_deep_otm_stress,
+    bench_cos_vs_fft_single,
+    bench_cos_vs_fft_strip
 );
 criterion_main!(fft_benches);
