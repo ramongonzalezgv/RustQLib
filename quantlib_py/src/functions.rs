@@ -122,7 +122,7 @@ fn price_european_analytical_bs(
     let model = PyBlackScholesModel::new(sigma, r, q)?;
     let engine = AnalyticalEngine;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -156,7 +156,7 @@ fn price_european_analytical_bs_batch(
     let valuation = parse_date(valuation_date)?;
     let model = BlackScholesModel::new(sigma, r, q).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(n);
         for i in 0..n {
             let option_type = OptionType::from_str(&option_types[i])?;
@@ -208,7 +208,7 @@ fn price_european_analytical_bs_batch_fast(
     let valuation = parse_date(valuation_date)?;
     let model = BlackScholesModel::new(sigma, r, q).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(n);
         for i in 0..n {
             let option_type = if is_call[i] {
@@ -273,7 +273,7 @@ fn price_european_analytical_bs_batch_per_model(
 
     let valuation = parse_date(valuation_date)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(n);
         let mut models = Vec::with_capacity(n);
 
@@ -324,7 +324,7 @@ fn price_european_analytical_black(
     let model = PyBlackModel::new(sigma, r)?;
     let engine = AnalyticalEngine;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -357,7 +357,7 @@ fn price_european_analytical_black_batch(
     let valuation = parse_date(valuation_date)?;
     let model = BlackModel::new(sigma, r).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(n);
         for i in 0..n {
             let option_type = OptionType::from_str(&option_types[i])?;
@@ -408,7 +408,7 @@ fn price_european_analytical_black_batch_fast(
     let valuation = parse_date(valuation_date)?;
     let model = BlackModel::new(sigma, r).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(n);
         for i in 0..n {
             let option_type = if is_call[i] {
@@ -470,7 +470,7 @@ fn price_european_analytical_black_batch_per_model(
 
     let valuation = parse_date(valuation_date)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(n);
         let mut models = Vec::with_capacity(n);
 
@@ -526,7 +526,7 @@ fn price_digital_analytical_bs(
     let model = PyBlackScholesModel::new(sigma, r, q)?;
     let engine = AnalyticalEngine;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -559,7 +559,7 @@ fn price_digital_analytical_black(
     let model = PyBlackModel::new(sigma, r)?;
     let engine = AnalyticalEngine;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -598,7 +598,7 @@ fn price_digital_monte_carlo_bs(
     let model = PyBlackScholesModel::new(sigma, r, q)?;
     let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
 
-    py.allow_threads(move || engine.inner.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -641,7 +641,7 @@ fn price_digital_monte_carlo_heston(
     let model = PyHestonModel::new(kappa, theta, sigma, rho, v0, r, q)?;
     let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
 
-    py.allow_threads(move || engine.inner.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -670,7 +670,7 @@ fn price_european_monte_carlo_bs(
     let model = PyBlackScholesModel::new(sigma, r, q)?;
     let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
 
-    py.allow_threads(move || engine.inner.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -703,7 +703,7 @@ fn price_european_monte_carlo_heston(
     let model = PyHestonModel::new(kappa, theta, sigma, rho, v0, r, q)?;
     let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
 
-    py.allow_threads(move || engine.inner.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -731,7 +731,7 @@ fn price_european_fft_bs(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -773,7 +773,7 @@ fn price_european_fft_black_batch(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(rows);
         for index in 0..rows {
             let option_type = OptionType::from_str(&option_types[index])?;
@@ -824,7 +824,7 @@ fn price_european_fft_black(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -867,7 +867,7 @@ fn price_european_fft_bs_batch(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(rows);
         for index in 0..rows {
             let option_type = OptionType::from_str(&option_types[index])?;
@@ -917,7 +917,7 @@ fn price_european_fft_heston(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -964,7 +964,7 @@ fn price_european_fft_heston_batch(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(rows);
         for index in 0..rows {
             let option_type = OptionType::from_str(&option_types[index])?;
@@ -1028,7 +1028,7 @@ fn price_european_fft_bates(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -1090,7 +1090,7 @@ fn price_european_fft_bates_batch(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(rows);
         for index in 0..rows {
             let option_type = OptionType::from_str(&option_types[index])?;
@@ -1140,7 +1140,7 @@ fn price_european_fft_kou(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || engine.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -1187,7 +1187,7 @@ fn price_european_fft_kou_batch(
     let interp = parse_fft_interpolation(interp)?;
     let engine = RustFFTEngine::new(n, b, interp).map_err(to_py_err)?;
 
-    py.allow_threads(move || {
+    py.detach(move || {
         let mut products = Vec::with_capacity(rows);
         for index in 0..rows {
             let option_type = OptionType::from_str(&option_types[index])?;
@@ -1242,7 +1242,7 @@ fn price_asian_monte_carlo_bs(
     let model = PyBlackScholesModel::new(sigma, r, q)?;
     let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
 
-    py.allow_threads(move || engine.inner.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -1283,7 +1283,7 @@ fn price_asian_monte_carlo_heston(
     let model = PyHestonModel::new(kappa, theta, sigma, rho, v0, r, q)?;
     let engine = PyMonteCarloEngine::new(n_paths, n_steps, seed, parallel, chunk_size)?;
 
-    py.allow_threads(move || engine.inner.calculate_price(&option.inner, &model.inner))
+    py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
         .map_err(to_py_err)
 }
 
@@ -2045,7 +2045,7 @@ fn calibrate_black<'py>(
 
     let bounds = [sigma_bounds, r_bounds];
     let (model, result) = py
-        .allow_threads(move || {
+        .detach(move || {
             calibrate_black_model(
                 &quotes,
                 target,
@@ -2167,7 +2167,7 @@ fn calibrate_black_scholes<'py>(
 
     let bounds = [sigma_bounds, r_bounds, q_bounds];
     let (model, result) = py
-        .allow_threads(move || {
+        .detach(move || {
             calibrate_black_scholes_model(
                 &quotes,
                 target,
@@ -2279,7 +2279,7 @@ fn calibrate_sabr<'py>(
 
     let bounds = [alpha_bounds, beta_bounds, rho_bounds, nu_bounds];
     let (model, result) = py
-        .allow_threads(move || {
+        .detach(move || {
             calibrate_sabr_model(
                 &quotes,
                 initial_alpha,
@@ -2451,7 +2451,7 @@ fn calibrate_heston<'py>(
     ];
 
     let (model, result) = py
-        .allow_threads(move || {
+        .detach(move || {
             calibrate_heston_model(&quotes, initial_model, Some(bounds), &config, fft_config)
         })
         .map_err(to_py_err)?;
