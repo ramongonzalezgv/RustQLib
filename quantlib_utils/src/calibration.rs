@@ -1,11 +1,8 @@
 use std::collections::BTreeMap;
 
-use quantlib_core::{
-    CalibrationResult, OptionType, PricingEngine, QuantLibError, SimpleDate, norm_cdf,
-};
+use quantlib_core::{CalibrationResult, OptionType, QuantLibError, norm_cdf};
 use quantlib_engines::{FFTEngine, InterpolationKind};
 use quantlib_models::{BlackModel, BlackScholesModel, HestonModel, SabrModel};
-use quantlib_products::EuropeanOption;
 use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -475,7 +472,7 @@ pub fn calibrate_heston_model(
     validate_bounds(&bounds, &initial, &HESTON_PARAMETER_NAMES)?;
 
     let engine = FFTEngine::new(fft_config.n, fft_config.b, fft_config.interp)?;
-    let options = build_heston_options(quotes)?;
+    let strips = group_heston_strips(quotes);
 
     let objective = |params: &[f64]| -> Result<f64, QuantLibError> {
         let model = HestonModel::new(
@@ -483,7 +480,7 @@ pub fn calibrate_heston_model(
         )?;
 
         let (_, market_values, errors, weights) =
-            evaluate_heston_quotes(&engine, &model, &options, quotes)?;
+            evaluate_heston_quotes(&engine, &model, &strips, quotes)?;
         Ok(compute_objective(
             config.objective,
             &errors,
@@ -504,7 +501,7 @@ pub fn calibrate_heston_model(
     )?;
 
     let (model_values, market_values, errors, _) =
-        evaluate_heston_quotes(&engine, &model, &options, quotes)?;
+        evaluate_heston_quotes(&engine, &model, &strips, quotes)?;
 
     let result = build_calibration_result(
         &HESTON_PARAMETER_NAMES,
@@ -698,54 +695,71 @@ fn evaluate_sabr_quotes(
     Ok((model_values, market_values, errors, weights))
 }
 
+/// Quotes sharing one exact maturity and underlying, priced from one FFT strip.
+struct HestonStrip {
+    underlying: f64,
+    maturity: f64,
+    quote_indices: Vec<usize>,
+    strikes: Vec<f64>,
+    option_types: Vec<OptionType>,
+}
+
+/// Groups quotes by bit-exact `(maturity, underlying)` once, before optimization.
+fn group_heston_strips(quotes: &[VanillaOptionCalibrationQuote]) -> Vec<HestonStrip> {
+    let mut strips: Vec<HestonStrip> = Vec::new();
+    let mut index_by_key = BTreeMap::new();
+
+    for (quote_index, quote) in quotes.iter().enumerate() {
+        let key = (quote.maturity.to_bits(), quote.underlying.to_bits());
+        let strip_index = *index_by_key.entry(key).or_insert_with(|| {
+            strips.push(HestonStrip {
+                underlying: quote.underlying,
+                maturity: quote.maturity,
+                quote_indices: Vec::new(),
+                strikes: Vec::new(),
+                option_types: Vec::new(),
+            });
+            strips.len() - 1
+        });
+
+        let strip = &mut strips[strip_index];
+        strip.quote_indices.push(quote_index);
+        strip.strikes.push(quote.strike);
+        strip.option_types.push(quote.option_type);
+    }
+
+    strips
+}
+
 fn evaluate_heston_quotes(
     engine: &FFTEngine,
     model: &HestonModel,
-    options: &[EuropeanOption],
+    strips: &[HestonStrip],
     quotes: &[VanillaOptionCalibrationQuote],
 ) -> Result<EvaluationVectors, QuantLibError> {
-    let mut model_values = Vec::with_capacity(quotes.len());
-    let mut market_values = Vec::with_capacity(quotes.len());
-    let mut errors = Vec::with_capacity(quotes.len());
-    let mut weights = Vec::with_capacity(quotes.len());
-
-    for (option, quote) in options.iter().zip(quotes.iter()) {
-        let model_value = engine.calculate_price(option, model)?;
-        let error = model_value - quote.market_value;
-
-        model_values.push(model_value);
-        market_values.push(quote.market_value);
-        errors.push(error);
-        weights.push(quote.weight);
+    let mut model_values = vec![0.0; quotes.len()];
+    for strip in strips {
+        let prices = engine.price_strip(
+            model,
+            strip.underlying,
+            strip.maturity,
+            &strip.strikes,
+            &strip.option_types,
+        )?;
+        for (&quote_index, price) in strip.quote_indices.iter().zip(prices) {
+            model_values[quote_index] = price;
+        }
     }
 
-    Ok((model_values, market_values, errors, weights))
-}
-
-fn build_heston_options(
-    quotes: &[VanillaOptionCalibrationQuote],
-) -> Result<Vec<EuropeanOption>, QuantLibError> {
-    let valuation_date = SimpleDate::new(2026, 1, 1)?;
-
-    quotes
+    let market_values: Vec<f64> = quotes.iter().map(|quote| quote.market_value).collect();
+    let errors = model_values
         .iter()
-        .map(|quote| {
-            let expiry = valuation_date.add_days(maturity_to_days(quote.maturity));
-            EuropeanOption::new_spot(
-                quote.underlying,
-                quote.strike,
-                expiry,
-                Some(valuation_date),
-                quote.option_type,
-                1,
-                None,
-            )
-        })
-        .collect()
-}
+        .zip(&market_values)
+        .map(|(model_value, market_value)| model_value - market_value)
+        .collect();
+    let weights = quotes.iter().map(|quote| quote.weight).collect();
 
-fn maturity_to_days(maturity_years: f64) -> i64 {
-    (maturity_years.max(1.0 / 365.0) * 365.0).round() as i64
+    Ok((model_values, market_values, errors, weights))
 }
 
 fn optimize_bounded<F>(
@@ -1392,7 +1406,7 @@ fn intrinsic(option_type: OptionType, underlying: f64, strike: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use quantlib_core::{OptionType, PricingEngine, QuantLibError};
+    use quantlib_core::{OptionType, QuantLibError};
     use quantlib_engines::InterpolationKind;
 
     use super::{
@@ -1596,26 +1610,16 @@ mod tests {
         let fft = quantlib_engines::FFTEngine::new(1 << 9, 120.0, InterpolationKind::Cubic)
             .expect("engine");
 
-        let valuation_date = quantlib_core::SimpleDate::new(2026, 1, 1).expect("valuation");
         let maturities: [f64; 2] = [0.5, 1.0];
         let strikes = [90.0, 100.0, 110.0];
 
         let mut quotes = Vec::new();
         for maturity in maturities {
-            let expiry = valuation_date.add_days((maturity * 365.0).round() as i64);
             for strike in strikes {
                 for option_type in [OptionType::Call, OptionType::Put] {
-                    let option = quantlib_products::EuropeanOption::new_spot(
-                        100.0,
-                        strike,
-                        expiry,
-                        Some(valuation_date),
-                        option_type,
-                        1,
-                        None,
-                    )
-                    .expect("option");
-                    let market_value = fft.calculate_price(&option, &true_model).expect("price");
+                    let market_value = fft
+                        .price_strip(&true_model, 100.0, maturity, &[strike], &[option_type])
+                        .expect("price")[0];
 
                     quotes.push(VanillaOptionCalibrationQuote {
                         underlying: 100.0,
@@ -1797,6 +1801,112 @@ mod tests {
                 );
             }
             other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// Calibrates with every parameter pinned to `model`, so the result's
+    /// model values are `model` priced at the quotes.
+    fn heston_model_values(
+        quotes: &[VanillaOptionCalibrationQuote],
+        model: quantlib_models::HestonModel,
+        fft_config: HestonFftConfig,
+    ) -> Vec<f64> {
+        let params = [
+            model.kappa,
+            model.theta,
+            model.sigma,
+            model.rho,
+            model.v0,
+            model.r,
+            model.q,
+        ];
+        let config = CalibrationConfig {
+            method: CalibrationMethod::NelderMead,
+            nelder_mead: NelderMeadConfig {
+                max_iterations: 1,
+                ..NelderMeadConfig::default()
+            },
+            ..CalibrationConfig::default()
+        };
+        let (_, result) = calibrate_heston_model(
+            quotes,
+            model,
+            Some(params.map(|p| (p, p))),
+            &config,
+            fft_config,
+        )
+        .expect("calibration");
+        result.model_values
+    }
+
+    #[test]
+    fn heston_calibration_prices_quotes_at_their_exact_maturity() {
+        let model = quantlib_models::HestonModel::new(1.8, 0.05, 0.45, -0.65, 0.04, 0.02, 0.0)
+            .expect("heston");
+        let fft_config = HestonFftConfig::default();
+        let fft = quantlib_engines::FFTEngine::new(fft_config.n, fft_config.b, fft_config.interp)
+            .expect("engine");
+
+        // T = 1/12 used to become 30 days (T = 0.08219), and T = 0.001 was
+        // clamped up to one day.
+        let cases = [
+            (1.0 / 12.0, 100.0, OptionType::Call),
+            (1.0 / 12.0, 95.0, OptionType::Put),
+            (0.001, 100.0, OptionType::Call),
+            (0.75, 110.0, OptionType::Call),
+        ];
+        let quotes: Vec<_> = cases
+            .iter()
+            .map(|&(maturity, strike, option_type)| {
+                VanillaOptionCalibrationQuote::price(100.0, strike, maturity, option_type, 1.0, 1.0)
+            })
+            .collect();
+
+        let model_values = heston_model_values(&quotes, model, fft_config);
+        for (&(maturity, strike, option_type), &value) in cases.iter().zip(&model_values) {
+            let direct = fft
+                .price_strip(&model, 100.0, maturity, &[strike], &[option_type])
+                .expect("direct price")[0];
+            let rel = (value - direct).abs() / direct.abs();
+            assert!(
+                rel < 1.0e-10,
+                "T={maturity}, K={strike}: calibration={value}, direct={direct}, rel={rel:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn heston_calibration_keeps_quote_order_across_maturities_and_spots() {
+        let model = quantlib_models::HestonModel::new(1.8, 0.05, 0.45, -0.65, 0.04, 0.02, 0.0)
+            .expect("heston");
+        let fft_config = HestonFftConfig::default();
+        let fft = quantlib_engines::FFTEngine::new(fft_config.n, fft_config.b, fft_config.interp)
+            .expect("engine");
+
+        // Interleaved maturities and two underlyings at the same maturity.
+        let cases = [
+            (100.0, 1.0, 105.0, OptionType::Call),
+            (100.0, 0.5, 95.0, OptionType::Put),
+            (120.0, 1.0, 105.0, OptionType::Call),
+            (100.0, 1.0, 90.0, OptionType::Put),
+            (100.0, 0.5, 100.0, OptionType::Call),
+        ];
+        let quotes: Vec<_> = cases
+            .iter()
+            .map(|&(spot, maturity, strike, option_type)| {
+                VanillaOptionCalibrationQuote::price(spot, strike, maturity, option_type, 1.0, 1.0)
+            })
+            .collect();
+
+        let model_values = heston_model_values(&quotes, model, fft_config);
+        for (&(spot, maturity, strike, option_type), &value) in cases.iter().zip(&model_values) {
+            let direct = fft
+                .price_strip(&model, spot, maturity, &[strike], &[option_type])
+                .expect("direct price")[0];
+            assert!(
+                (value - direct).abs() <= 1.0e-12 * direct.abs(),
+                "S={spot}, T={maturity}, K={strike}: calibration={value}, direct={direct}"
+            );
         }
     }
 }

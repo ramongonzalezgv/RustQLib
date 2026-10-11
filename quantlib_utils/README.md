@@ -18,7 +18,7 @@ Utilities and supporting components for QuantRustLib.
   - `calibrate_black_model`
   - `calibrate_black_scholes_model`
   - `calibrate_sabr_model`
-  - `calibrate_heston_model` (FFT-based pricing inside objective)
+  - `calibrate_heston_model` (FFT pricing inside the objective: quotes are grouped by exact maturity and underlying once, then priced with one FFT strip per group)
 
 Calibrators return `(model, CalibrationResult)` where `CalibrationResult` includes:
 
