@@ -1,4 +1,4 @@
-use quantlib_core::{OptionType, PricingEngine, QuantLibError};
+use quantlib_core::{OptionType, PricingEngine, QuantLibError, norm_cdf, norm_pdf};
 use quantlib_models::{BlackModel, BlackScholesModel, SabrModel};
 use quantlib_products::{
     AmericanOption, AsianOption, DigitalOption, DigitalPayoffType, EuropeanOption,
@@ -368,25 +368,6 @@ impl PricingEngine<AsianOption, SabrModel> for AnalyticalEngine {
     }
 }
 
-fn norm_cdf(x: f64) -> f64 {
-    // Uses system libm erf for high-precision parity with Python's math.erf/scipy CDF.
-    0.5 * (1.0 + libm_erf(x / std::f64::consts::SQRT_2))
-}
-
-fn norm_pdf(x: f64) -> f64 {
-    (-0.5 * x * x).exp() / (2.0 * std::f64::consts::PI).sqrt()
-}
-
-fn libm_erf(x: f64) -> f64 {
-    #[link(name = "m")]
-    unsafe extern "C" {
-        fn erf(x: f64) -> f64;
-    }
-
-    // SAFETY: Calling a pure libm function with a finite f64 input.
-    unsafe { erf(x) }
-}
-
 #[cfg(test)]
 mod tests {
     use quantlib_core::{OptionType, PricingEngine, SimpleDate};
@@ -395,13 +376,9 @@ mod tests {
         AmericanOption, AsianOption, AveragingType, DigitalOption, DigitalPayoffType,
     };
 
-    use super::{AnalyticalEngine, norm_cdf};
+    use quantlib_core::norm_cdf;
 
-    #[test]
-    fn cdf_is_reasonable() {
-        assert!((norm_cdf(0.0) - 0.5).abs() < 1.0e-8);
-        assert!((norm_cdf(1.0) - 0.841_344_746).abs() < 1.0e-7);
-    }
+    use super::AnalyticalEngine;
 
     #[test]
     fn analytical_prices_cash_digital_bs() {

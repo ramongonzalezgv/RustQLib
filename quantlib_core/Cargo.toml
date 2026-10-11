@@ -5,4 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+libm = "0.2"
 rayon = "1.10"
