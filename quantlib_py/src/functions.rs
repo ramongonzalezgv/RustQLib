@@ -603,6 +603,8 @@ fn price_digital_monte_carlo_bs(
         parallel,
         chunk_size,
         DEFAULT_HESTON_SCHEME,
+        false,
+        false,
     )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
@@ -653,6 +655,8 @@ fn price_digital_monte_carlo_heston(
         parallel,
         chunk_size,
         DEFAULT_HESTON_SCHEME,
+        false,
+        false,
     )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
@@ -689,6 +693,8 @@ fn price_european_monte_carlo_bs(
         parallel,
         chunk_size,
         DEFAULT_HESTON_SCHEME,
+        false,
+        false,
     )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
@@ -729,6 +735,8 @@ fn price_european_monte_carlo_heston(
         parallel,
         chunk_size,
         DEFAULT_HESTON_SCHEME,
+        false,
+        false,
     )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
@@ -1275,6 +1283,8 @@ fn price_asian_monte_carlo_bs(
         parallel,
         chunk_size,
         DEFAULT_HESTON_SCHEME,
+        false,
+        false,
     )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))
@@ -1323,6 +1333,8 @@ fn price_asian_monte_carlo_heston(
         parallel,
         chunk_size,
         DEFAULT_HESTON_SCHEME,
+        false,
+        false,
     )?;
 
     py.detach(move || engine.inner.calculate_price(&option.inner, &model.inner))

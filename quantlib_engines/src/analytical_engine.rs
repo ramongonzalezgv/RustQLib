@@ -1,7 +1,7 @@
 use quantlib_core::{OptionType, PricingEngine, QuantLibError, norm_cdf, norm_pdf};
 use quantlib_models::{BlackModel, BlackScholesModel, SabrModel};
 use quantlib_products::{
-    AmericanOption, AsianOption, DigitalOption, DigitalPayoffType, EuropeanOption,
+    AmericanOption, AsianOption, AveragingType, DigitalOption, DigitalPayoffType, EuropeanOption,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -308,15 +308,71 @@ impl PricingEngine<AmericanOption, BlackScholesModel> for AnalyticalEngine {
     }
 }
 
+/// Geometric-average Asian under Black–Scholes (Kemna & Vorst 1990), for a
+/// unit quantity.
+///
+/// `n_steps = Some(n)` averages the `n + 1` equally spaced fixings
+/// `S_0, S_{T/n}, …, S_T` (the Monte Carlo engine's monitoring);
+/// `None` is continuous monitoring. `ln G` is normal with mean
+/// `ln S_0 + (r − q − σ²/2)·T/2` and variance `σ²T·(2n + 1)/(6(n + 1))`
+/// (`σ²T/3` in the continuous limit), so the price is Black-76 on `G`.
+pub fn geometric_asian_black_scholes(
+    spot: f64,
+    strike: f64,
+    ttm: f64,
+    model: &BlackScholesModel,
+    option_type: OptionType,
+    n_steps: Option<usize>,
+) -> f64 {
+    let discount = (-model.r * ttm).exp();
+    if ttm <= 0.0 {
+        return AnalyticalEngine::intrinsic(option_type, spot, strike);
+    }
+
+    let sigma_sq = model.sigma * model.sigma;
+    let variance_factor = n_steps.map_or(1.0 / 3.0, |n| {
+        let n = n.max(1) as f64;
+        (2.0 * n + 1.0) / (6.0 * (n + 1.0))
+    });
+    let mean_log = spot.ln() + (model.r - model.q - 0.5 * sigma_sq) * 0.5 * ttm;
+    let var_log = sigma_sq * ttm * variance_factor;
+    let forward = (mean_log + 0.5 * var_log).exp();
+    let sd = var_log.sqrt();
+    let d1 = ((forward / strike).ln() + 0.5 * var_log) / sd;
+    let d2 = d1 - sd;
+    discount
+        * match option_type {
+            OptionType::Call => forward * norm_cdf(d1) - strike * norm_cdf(d2),
+            OptionType::Put => strike * norm_cdf(-d2) - forward * norm_cdf(-d1),
+        }
+}
+
+/// Continuously monitored geometric Asians only; arithmetic averages have no
+/// closed form (use `MonteCarloEngine`).
 impl PricingEngine<AsianOption, BlackScholesModel> for AnalyticalEngine {
     fn calculate_price(
         &self,
-        _product: &AsianOption,
-        _model: &BlackScholesModel,
+        product: &AsianOption,
+        model: &BlackScholesModel,
     ) -> Result<f64, QuantLibError> {
-        Err(QuantLibError::Engine(
-            "analytical engine does not support AsianOption under BlackScholesModel".to_owned(),
-        ))
+        product.validate()?;
+        model.validate()?;
+        if product.averaging_type != AveragingType::Geometric {
+            return Err(QuantLibError::Engine(
+                "analytical engine prices only geometric AsianOptions under BlackScholesModel; \
+                 use MonteCarloEngine for arithmetic averages"
+                    .to_owned(),
+            ));
+        }
+        let unit = geometric_asian_black_scholes(
+            product.s,
+            product.k,
+            product.ttm(),
+            model,
+            product.option_type,
+            None,
+        );
+        Ok(unit * f64::from(product.qty))
     }
 }
 
@@ -500,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn analytical_engine_rejects_asian_option() {
+    fn analytical_engine_rejects_arithmetic_asian_option() {
         let option = AsianOption::new(
             100.0,
             100.0,
@@ -519,7 +575,8 @@ mod tests {
             .calculate_price(&option, &model)
             .expect_err("must reject");
         assert!(
-            err.to_string().contains("does not support AsianOption"),
+            err.to_string()
+                .contains("use MonteCarloEngine for arithmetic averages"),
             "unexpected error: {err}"
         );
     }
