@@ -26,7 +26,8 @@ use paths::{
 /// - `control_variate`: European and digital options use the discounted
 ///   terminal spot (`E = S_0 e^{−qT}`); arithmetic Asians under Black–Scholes
 ///   use the geometric Asian (closed form); other Asians use the arithmetic
-///   average of the spot (`E[S_t] = S_0 e^{(r−q)t}`).
+///   average of the spot (`E[S_t] = S_0 e^{(r−q)t}`). Ignored under Heston
+///   full truncation, whose discretised spot is not a martingale.
 ///
 /// Black–Scholes European and digital options are simulated with one exact
 /// log-normal step; Heston and Asian options use `n_steps` steps.
@@ -57,25 +58,88 @@ impl SimulatedPaths {
         self.values.is_empty()
     }
 
-    pub fn path(&self, index: usize) -> &[f64] {
-        let width = self.n_steps + 1;
-        &self.values[index * width..(index + 1) * width]
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &[f64]> {
         self.values.chunks_exact(self.n_steps + 1)
     }
 }
 
-impl MonteCarloEngine {
-    pub fn new(n_paths: usize, n_steps: usize, seed: Option<u64>) -> Result<Self, QuantLibError> {
-        Ok(Self::from_config(MonteCarloConfig::new(
-            n_paths, n_steps, seed,
-        )?))
+/// A model the engine simulates.
+trait McModel: Sync {
+    type Path: PathModel;
+    fn validate(&self) -> Result<(), QuantLibError>;
+    /// `(r, q)`.
+    fn rates(&self) -> (f64, f64);
+    fn path(&self, spot: f64, dt: f64, scheme: HestonScheme) -> Self::Path;
+    /// Steps for a terminal payoff.
+    fn terminal_steps(n_steps: usize) -> usize;
+    /// Whether the discretised spot is a martingale, as every control mean assumes.
+    fn martingale(scheme: HestonScheme) -> bool;
+    /// Undiscounted closed-form geometric Asian, the control for an arithmetic one.
+    fn geometric_asian(&self, _product: &AsianOption, _n_steps: usize) -> Option<f64> {
+        None
+    }
+}
+
+impl McModel for BlackScholesModel {
+    type Path = BlackScholesPath;
+
+    fn validate(&self) -> Result<(), QuantLibError> {
+        BlackScholesModel::validate(self)
     }
 
-    pub fn from_config(config: MonteCarloConfig) -> Self {
-        Self { config }
+    fn rates(&self) -> (f64, f64) {
+        (self.r, self.q)
+    }
+
+    fn path(&self, spot: f64, dt: f64, _scheme: HestonScheme) -> BlackScholesPath {
+        BlackScholesPath::new(self, spot, dt)
+    }
+
+    fn terminal_steps(_n_steps: usize) -> usize {
+        1
+    }
+
+    fn martingale(_scheme: HestonScheme) -> bool {
+        true
+    }
+
+    fn geometric_asian(&self, product: &AsianOption, n_steps: usize) -> Option<f64> {
+        let (s, k, ttm) = (product.s, product.k, product.ttm());
+        let unit =
+            geometric_asian_black_scholes(s, k, ttm, self, product.option_type, Some(n_steps));
+        Some(f64::from(product.qty) * unit * (self.r * ttm).exp())
+    }
+}
+
+impl McModel for HestonModel {
+    type Path = HestonPath;
+
+    fn validate(&self) -> Result<(), QuantLibError> {
+        HestonModel::validate(self)
+    }
+
+    fn rates(&self) -> (f64, f64) {
+        (self.r, self.q)
+    }
+
+    fn path(&self, spot: f64, dt: f64, scheme: HestonScheme) -> HestonPath {
+        HestonPath::new(self, spot, dt, scheme)
+    }
+
+    fn terminal_steps(n_steps: usize) -> usize {
+        n_steps
+    }
+
+    fn martingale(scheme: HestonScheme) -> bool {
+        scheme == HestonScheme::QuadraticExponential
+    }
+}
+
+impl MonteCarloEngine {
+    pub fn new(n_paths: usize, n_steps: usize, seed: Option<u64>) -> Result<Self, QuantLibError> {
+        Ok(Self {
+            config: MonteCarloConfig::new(n_paths, n_steps, seed)?,
+        })
     }
 
     pub fn with_parallel(mut self, parallel: bool) -> Self {
@@ -84,7 +148,7 @@ impl MonteCarloEngine {
     }
 
     pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
-        self.config.chunk_size = chunk_size.max(1);
+        self.config.chunk_size = chunk_size;
         self
     }
 
@@ -127,11 +191,7 @@ impl MonteCarloEngine {
         model: &BlackScholesModel,
         ttm: f64,
     ) -> Result<SimulatedPaths, QuantLibError> {
-        self.validate_path_inputs(spot, ttm)?;
-        model.validate()?;
-        let n_steps = self.config.n_steps;
-        let path = BlackScholesPath::new(model, spot, ttm / n_steps as f64);
-        Ok(self.record(&path, n_steps))
+        self.sample_paths(spot, model, ttm)
     }
 
     /// Heston counterpart of [`Self::sample_paths_black_scholes`].
@@ -141,22 +201,16 @@ impl MonteCarloEngine {
         model: &HestonModel,
         ttm: f64,
     ) -> Result<SimulatedPaths, QuantLibError> {
-        self.validate_path_inputs(spot, ttm)?;
-        model.validate()?;
-        let n_steps = self.config.n_steps;
-        let path = HestonPath::new(model, spot, ttm / n_steps as f64, self.config.heston_scheme);
-        Ok(self.record(&path, n_steps))
+        self.sample_paths(spot, model, ttm)
     }
 
-    fn record<M: PathModel>(&self, path: &M, n_steps: usize) -> SimulatedPaths {
-        SimulatedPaths {
-            n_steps,
-            values: record_paths(&self.config, self.config.resolved_seed(), path, n_steps),
-        }
-    }
-
-    fn validate_path_inputs(&self, spot: f64, ttm: f64) -> Result<(), QuantLibError> {
-        self.validate()?;
+    fn sample_paths<M: McModel>(
+        &self,
+        spot: f64,
+        model: &M,
+        ttm: f64,
+    ) -> Result<SimulatedPaths, QuantLibError> {
+        self.validate().and(model.validate())?;
         if !(spot.is_finite() && spot > 0.0) {
             return Err(QuantLibError::Validation(
                 "spot must be finite and positive".to_owned(),
@@ -167,62 +221,47 @@ impl MonteCarloEngine {
                 "time to maturity must be finite and positive".to_owned(),
             ));
         }
-        Ok(())
+        let n_steps = self.config.n_steps;
+        let path = model.path(spot, ttm / n_steps as f64, self.config.heston_scheme);
+        Ok(SimulatedPaths {
+            n_steps,
+            values: record_paths(&self.config, self.config.resolved_seed(), &path, n_steps),
+        })
     }
 
-    /// Runs the driver and discounts; `control_mean` is `E[X]` for the
-    /// functional's control, used when control variates are enabled.
-    fn estimate<M: PathModel, F: PathFunctional>(
+    /// Simulates `functional` over `n_steps` steps to `ttm` and discounts;
+    /// `control_mean` is `E[X]` for the functional's control.
+    fn estimate<M: McModel, F: PathFunctional>(
         &self,
-        path: &M,
-        functional: &F,
+        model: &M,
+        spot: f64,
+        ttm: f64,
         n_steps: usize,
-        discount: f64,
+        functional: &F,
         control_mean: f64,
     ) -> McEstimate {
-        let moments = simulate(
-            &self.config,
-            self.config.resolved_seed(),
-            path,
-            functional,
-            n_steps,
-        );
-        let control = self.config.control_variate.then_some(control_mean);
+        let scheme = self.config.heston_scheme;
+        let path = model.path(spot, ttm / n_steps as f64, scheme);
+        let seed = self.config.resolved_seed();
+        let moments = simulate(&self.config, seed, &path, functional, n_steps);
+        let control =
+            (self.config.control_variate && M::martingale(scheme)).then_some(control_mean);
+        let discount = (-model.rates().0 * ttm).exp();
         moments.estimate(discount, control, self.config.simulated_paths())
     }
 
-    /// Asian options under either model: running averages over `n_steps` steps.
-    fn price_asian<M: PathModel>(
+    /// A payoff of `S_T`, with `S_T` itself as the control.
+    fn price_terminal<M: McModel>(
         &self,
-        product: &AsianOption,
-        path: &M,
-        rate: f64,
-        dividend_yield: f64,
-        control: AsianControl,
-        geometric_control_mean: f64,
+        model: &M,
+        spot: f64,
+        ttm: f64,
+        payoff: impl Fn(f64) -> f64 + Sync,
     ) -> McEstimate {
-        let ttm = product.ttm();
-        let n_steps = self.config.n_steps;
-        let (strike, qty) = (product.k, f64::from(product.qty));
-        let option_type = product.option_type;
-        let functional = Average {
-            geometric: product.averaging_type == AveragingType::Geometric,
-            control,
-            payoff: move |average: f64| qty * vanilla_payoff(option_type, average, strike),
-        };
-        let control_mean = match control {
-            AsianControl::GeometricPayoff => geometric_control_mean,
-            AsianControl::ArithmeticAverage => {
-                expected_arithmetic_average(product.s, rate - dividend_yield, ttm, n_steps)
-            }
-        };
-        self.estimate(
-            path,
-            &functional,
-            n_steps,
-            (-rate * ttm).exp(),
-            control_mean,
-        )
+        let (r, q) = model.rates();
+        let n_steps = M::terminal_steps(self.config.n_steps);
+        let forward = spot * ((r - q) * ttm).exp();
+        self.estimate(model, spot, ttm, n_steps, &Terminal { payoff }, forward)
     }
 }
 
@@ -249,156 +288,62 @@ fn expected_arithmetic_average(spot: f64, carry: f64, ttm: f64, n_steps: usize) 
     spot * sum / (n_steps + 1) as f64
 }
 
-impl MonteCarloPricing<EuropeanOption, BlackScholesModel> for MonteCarloEngine {
+impl<M: McModel> MonteCarloPricing<EuropeanOption, M> for MonteCarloEngine {
     fn price_with_stats(
         &self,
         product: &EuropeanOption,
-        model: &BlackScholesModel,
+        model: &M,
     ) -> Result<McEstimate, QuantLibError> {
-        self.validate()?;
-        product.validate()?;
-        model.validate()?;
-        let (spot, ttm) = (product.require_spot()?, product.ttm());
+        self.validate()
+            .and(product.validate())
+            .and(model.validate())?;
         let (strike, qty, option_type) = (product.k, f64::from(product.qty), product.option_type);
-        let functional = Terminal {
-            payoff: move |s_t: f64| qty * vanilla_payoff(option_type, s_t, strike),
-        };
-        let forward = spot * ((model.r - model.q) * ttm).exp();
-        Ok(self.estimate(
-            &BlackScholesPath::new(model, spot, ttm),
-            &functional,
-            1,
-            (-model.r * ttm).exp(),
-            forward,
-        ))
+        let payoff = move |s_t: f64| qty * vanilla_payoff(option_type, s_t, strike);
+        Ok(self.price_terminal(model, product.require_spot()?, product.ttm(), payoff))
     }
 }
 
-impl MonteCarloPricing<EuropeanOption, HestonModel> for MonteCarloEngine {
-    fn price_with_stats(
-        &self,
-        product: &EuropeanOption,
-        model: &HestonModel,
-    ) -> Result<McEstimate, QuantLibError> {
-        self.validate()?;
-        product.validate()?;
-        model.validate()?;
-        let (spot, ttm) = (product.require_spot()?, product.ttm());
-        let n_steps = self.config.n_steps;
-        let (strike, qty, option_type) = (product.k, f64::from(product.qty), product.option_type);
-        let functional = Terminal {
-            payoff: move |s_t: f64| qty * vanilla_payoff(option_type, s_t, strike),
-        };
-        let path = HestonPath::new(model, spot, ttm / n_steps as f64, self.config.heston_scheme);
-        let forward = spot * ((model.r - model.q) * ttm).exp();
-        Ok(self.estimate(&path, &functional, n_steps, (-model.r * ttm).exp(), forward))
-    }
-}
-
-impl MonteCarloPricing<DigitalOption, BlackScholesModel> for MonteCarloEngine {
+impl<M: McModel> MonteCarloPricing<DigitalOption, M> for MonteCarloEngine {
     fn price_with_stats(
         &self,
         product: &DigitalOption,
-        model: &BlackScholesModel,
+        model: &M,
     ) -> Result<McEstimate, QuantLibError> {
-        self.validate()?;
-        product.validate()?;
-        model.validate()?;
-        let (spot, ttm) = (product.require_spot()?, product.ttm());
+        self.validate()
+            .and(product.validate())
+            .and(model.validate())?;
         let qty = f64::from(product.european.qty);
-        let functional = Terminal {
-            payoff: |s_t: f64| qty * product.unit_payoff_at_maturity(s_t),
-        };
-        let forward = spot * ((model.r - model.q) * ttm).exp();
-        Ok(self.estimate(
-            &BlackScholesPath::new(model, spot, ttm),
-            &functional,
-            1,
-            (-model.r * ttm).exp(),
-            forward,
-        ))
+        let payoff = |s_t: f64| qty * product.unit_payoff_at_maturity(s_t);
+        Ok(self.price_terminal(model, product.require_spot()?, product.ttm(), payoff))
     }
 }
 
-impl MonteCarloPricing<DigitalOption, HestonModel> for MonteCarloEngine {
-    fn price_with_stats(
-        &self,
-        product: &DigitalOption,
-        model: &HestonModel,
-    ) -> Result<McEstimate, QuantLibError> {
-        self.validate()?;
-        product.validate()?;
-        model.validate()?;
-        let (spot, ttm) = (product.require_spot()?, product.ttm());
-        let n_steps = self.config.n_steps;
-        let qty = f64::from(product.european.qty);
-        let functional = Terminal {
-            payoff: |s_t: f64| qty * product.unit_payoff_at_maturity(s_t),
-        };
-        let path = HestonPath::new(model, spot, ttm / n_steps as f64, self.config.heston_scheme);
-        let forward = spot * ((model.r - model.q) * ttm).exp();
-        Ok(self.estimate(&path, &functional, n_steps, (-model.r * ttm).exp(), forward))
-    }
-}
-
-impl MonteCarloPricing<AsianOption, BlackScholesModel> for MonteCarloEngine {
+impl<M: McModel> MonteCarloPricing<AsianOption, M> for MonteCarloEngine {
     fn price_with_stats(
         &self,
         product: &AsianOption,
-        model: &BlackScholesModel,
+        model: &M,
     ) -> Result<McEstimate, QuantLibError> {
-        self.validate()?;
-        product.validate()?;
-        model.validate()?;
-        let ttm = product.ttm();
-        let n_steps = self.config.n_steps;
-        let path = BlackScholesPath::new(model, product.s, ttm / n_steps as f64);
-        // The geometric Asian is the natural control for an arithmetic one.
-        let (control, geometric_mean) = if product.averaging_type == AveragingType::Arithmetic {
-            let unit = geometric_asian_black_scholes(
-                product.s,
-                product.k,
-                ttm,
-                model,
-                product.option_type,
-                Some(n_steps),
-            );
-            (
-                AsianControl::GeometricPayoff,
-                f64::from(product.qty) * unit * (model.r * ttm).exp(),
-            )
-        } else {
-            (AsianControl::ArithmeticAverage, 0.0)
+        self.validate()
+            .and(product.validate())
+            .and(model.validate())?;
+        let (ttm, n_steps) = (product.ttm(), self.config.n_steps);
+        let (strike, qty, option_type) = (product.k, f64::from(product.qty), product.option_type);
+        let geometric = product.averaging_type == AveragingType::Geometric;
+        let geometric_control = (self.config.control_variate && !geometric)
+            .then(|| model.geometric_asian(product, n_steps))
+            .flatten();
+        let functional = Average {
+            geometric,
+            control: geometric_control.map_or(AsianControl::ArithmeticAverage, |_| {
+                AsianControl::GeometricPayoff
+            }),
+            payoff: move |average: f64| qty * vanilla_payoff(option_type, average, strike),
         };
-        Ok(self.price_asian(product, &path, model.r, model.q, control, geometric_mean))
-    }
-}
-
-impl MonteCarloPricing<AsianOption, HestonModel> for MonteCarloEngine {
-    fn price_with_stats(
-        &self,
-        product: &AsianOption,
-        model: &HestonModel,
-    ) -> Result<McEstimate, QuantLibError> {
-        self.validate()?;
-        product.validate()?;
-        model.validate()?;
-        let ttm = product.ttm();
-        let n_steps = self.config.n_steps;
-        let path = HestonPath::new(
-            model,
-            product.s,
-            ttm / n_steps as f64,
-            self.config.heston_scheme,
-        );
-        Ok(self.price_asian(
-            product,
-            &path,
-            model.r,
-            model.q,
-            AsianControl::ArithmeticAverage,
-            0.0,
-        ))
+        let (r, q) = model.rates();
+        let control_mean = geometric_control
+            .unwrap_or_else(|| expected_arithmetic_average(product.s, r - q, ttm, n_steps));
+        Ok(self.estimate(model, product.s, ttm, n_steps, &functional, control_mean))
     }
 }
 
@@ -477,48 +422,6 @@ mod tests {
                 "{a:?} vs {b:?}"
             );
         }
-    }
-
-    #[test]
-    fn mc_with_seed_is_reproducible() {
-        let model = BlackScholesModel::new(0.2, 0.05, 0.01).expect("model");
-        let engine = MonteCarloEngine::new(50_000, 252, Some(42)).expect("engine");
-        let option = european(OptionType::Call);
-        let p1 = engine.calculate_price(&option, &model).expect("price");
-        let p2 = engine.calculate_price(&option, &model).expect("price");
-        assert_eq!(p1.to_bits(), p2.to_bits());
-    }
-
-    #[test]
-    fn mc_parallel_matches_serial_for_seeded_bs() {
-        let model = BlackScholesModel::new(0.2, 0.05, 0.01).expect("model");
-        let option = european(OptionType::Call);
-        let engine = MonteCarloEngine::new(30_000, 252, Some(42))
-            .expect("engine")
-            .with_chunk_size(1_024);
-
-        let serial = engine
-            .with_parallel(false)
-            .price_with_stats(&option, &model);
-        let parallel = engine.with_parallel(true).price_with_stats(&option, &model);
-        assert_eq!(serial.expect("serial"), parallel.expect("parallel"));
-    }
-
-    #[test]
-    fn mc_parallel_matches_serial_for_seeded_heston() {
-        let model = HestonModel::new(1.5, 0.04, 0.4, -0.6, 0.04, 0.05, 0.01).expect("model");
-        let option = asian(OptionType::Put, AveragingType::Arithmetic);
-        let engine = MonteCarloEngine::new(20_000, 252, Some(777))
-            .expect("engine")
-            .with_chunk_size(512)
-            .with_antithetic(true)
-            .with_control_variate(true);
-
-        let serial = engine
-            .with_parallel(false)
-            .price_with_stats(&option, &model);
-        let parallel = engine.with_parallel(true).price_with_stats(&option, &model);
-        assert_eq!(serial.expect("serial"), parallel.expect("parallel"));
     }
 
     #[test]

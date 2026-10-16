@@ -9,40 +9,18 @@ use quantlib_engines::{
 use quantlib_models::{BlackScholesModel, HestonModel};
 use quantlib_products::{AsianOption, AveragingType, EuropeanOption};
 
-/// Price and standard error from one engine run over `n_paths * n_seeds`
-/// paths (the seed count only scales the path count).
+/// Price and standard error from one seeded engine run.
 fn mc_estimate<M>(
     option: &EuropeanOption,
     model: &M,
     n_paths: usize,
     n_steps: usize,
-    n_seeds: u64,
-) -> (f64, f64)
-where
-    MonteCarloEngine: MonteCarloPricing<EuropeanOption, M>,
-{
-    mc_estimate_with(
-        option,
-        model,
-        n_paths,
-        n_steps,
-        n_seeds,
-        HestonScheme::default(),
-    )
-}
-
-fn mc_estimate_with<M>(
-    option: &EuropeanOption,
-    model: &M,
-    n_paths: usize,
-    n_steps: usize,
-    n_seeds: u64,
     scheme: HestonScheme,
 ) -> (f64, f64)
 where
     MonteCarloEngine: MonteCarloPricing<EuropeanOption, M>,
 {
-    let estimate = MonteCarloEngine::new(n_paths * n_seeds as usize, n_steps, Some(1))
+    let estimate = MonteCarloEngine::new(n_paths, n_steps, Some(1))
         .unwrap()
         .with_heston_scheme(scheme)
         .price_with_stats(option, model)
@@ -73,7 +51,7 @@ fn black_scholes_mc_within_three_stderr_of_analytic() {
     ] {
         let option = spot_option(100.0, k, 365, option_type);
         let analytic = AnalyticalEngine.calculate_price(&option, &model).unwrap();
-        let (mc, stderr) = mc_estimate(&option, &model, 20_000, 1, 20);
+        let (mc, stderr) = mc_estimate(&option, &model, 400_000, 1, HestonScheme::default());
         assert!(
             (mc - analytic).abs() < 3.0 * stderr,
             "K={k} {option_type:?}: mc={mc}, analytic={analytic}, stderr={stderr}"
@@ -88,33 +66,12 @@ fn heston_mc_within_three_stderr_of_fourier() {
     for (k, option_type) in [(100.0, OptionType::Call), (90.0, OptionType::Put)] {
         let option = spot_option(100.0, k, 365, option_type);
         let reference = fft.calculate_price(&option, &model).unwrap();
-        let (mc, stderr) = mc_estimate(&option, &model, 10_000, 200, 16);
+        let (mc, stderr) = mc_estimate(&option, &model, 160_000, 200, HestonScheme::default());
         assert!(
             (mc - reference).abs() < 3.0 * stderr,
             "K={k} {option_type:?}: mc={mc}, fourier={reference}, stderr={stderr}"
         );
     }
-}
-
-#[test]
-fn same_seed_gives_identical_price() {
-    let option = spot_option(100.0, 100.0, 365, OptionType::Call);
-    let bs = BlackScholesModel::new(0.2, 0.05, 0.01).expect("model");
-    let heston = HestonModel::new(2.0, 0.04, 0.3, -0.7, 0.04, 0.03, 0.0).expect("model");
-    let engine = MonteCarloEngine::new(5_000, 50, Some(7)).unwrap();
-
-    let bs_a: f64 = engine.calculate_price(&option, &bs).unwrap();
-    let bs_b: f64 = engine.calculate_price(&option, &bs).unwrap();
-    let heston_a: f64 = engine.calculate_price(&option, &heston).unwrap();
-    let heston_b: f64 = engine.calculate_price(&option, &heston).unwrap();
-    assert_eq!(bs_a.to_bits(), bs_b.to_bits());
-    assert_eq!(heston_a.to_bits(), heston_b.to_bits());
-
-    let other_seed: f64 = MonteCarloEngine::new(5_000, 50, Some(8))
-        .unwrap()
-        .calculate_price(&option, &bs)
-        .unwrap();
-    assert_ne!(bs_a, other_seed);
 }
 
 #[test]
@@ -153,13 +110,12 @@ fn heston_qe_is_unbiased_with_coarse_steps_when_feller_fails() {
     let option = spot_option(100.0, 100.0, 365, OptionType::Call);
     let reference = fourier_reference(&option, &model);
 
-    // 500k paths, 32 steps per year.
-    let (mc, stderr) = mc_estimate_with(
+    // 32 steps per year.
+    let (mc, stderr) = mc_estimate(
         &option,
         &model,
-        25_000,
+        500_000,
         32,
-        20,
         HestonScheme::QuadraticExponential,
     );
     assert!(
@@ -179,12 +135,11 @@ fn heston_full_truncation_bias_shrinks_with_steps_when_feller_fails() {
     let biases: Vec<(usize, f64, f64)> = [12, 52, 252]
         .into_iter()
         .map(|steps| {
-            let (mc, stderr) = mc_estimate_with(
+            let (mc, stderr) = mc_estimate(
                 &option,
                 &model,
-                20_000,
+                200_000,
                 steps,
-                10,
                 HestonScheme::FullTruncation,
             );
             (steps, mc - reference, stderr)
@@ -214,12 +169,11 @@ fn heston_qe_terminal_spot_is_a_martingale() {
     let ttm = option.ttm();
     let expected = 100.0 * (-model.q * ttm).exp() - strike * (-model.r * ttm).exp();
 
-    let (mc, stderr) = mc_estimate_with(
+    let (mc, stderr) = mc_estimate(
         &option,
         &model,
-        25_000,
+        500_000,
         32,
-        20,
         HestonScheme::QuadraticExponential,
     );
     assert!(
@@ -243,27 +197,44 @@ fn asian_option(option_type: OptionType, averaging: AveragingType) -> AsianOptio
     .expect("asian option")
 }
 
-#[test]
-fn seeded_prices_are_bit_identical_for_any_thread_count() {
-    let heston = HestonModel::new(2.0, 0.04, 0.6, -0.7, 0.04, 0.01, 0.0).expect("model");
-    let option = asian_option(OptionType::Call, AveragingType::Arithmetic);
-    let engine = MonteCarloEngine::new(20_000, 52, Some(11))
-        .unwrap()
-        .with_chunk_size(1_000)
-        .with_antithetic(true);
-
+/// Serial and 1/2/8-thread runs of one seeded engine agree bit for bit.
+fn assert_thread_invariant<M: Sync>(engine: MonteCarloEngine, option: &AsianOption, model: &M)
+where
+    MonteCarloEngine: MonteCarloPricing<AsianOption, M>,
+{
     let serial = engine
         .with_parallel(false)
-        .price_with_stats(&option, &heston)
+        .price_with_stats(option, model)
         .unwrap();
     for threads in [1, 2, 8] {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .build()
             .unwrap();
-        let parallel = pool.install(|| engine.price_with_stats(&option, &heston).unwrap());
+        let parallel = pool.install(|| engine.price_with_stats(option, model).unwrap());
         assert_eq!(parallel, serial, "{threads} threads");
     }
+}
+
+#[test]
+fn seeded_prices_are_bit_identical_for_any_thread_count() {
+    let bs = BlackScholesModel::new(0.2, 0.05, 0.01).expect("model");
+    let heston = HestonModel::new(2.0, 0.04, 0.6, -0.7, 0.04, 0.01, 0.0).expect("model");
+    let option = asian_option(OptionType::Call, AveragingType::Arithmetic);
+    let engine = MonteCarloEngine::new(20_000, 52, Some(11))
+        .unwrap()
+        .with_chunk_size(1_000)
+        .with_antithetic(true)
+        .with_control_variate(true);
+    assert_thread_invariant(engine, &option, &bs);
+    assert_thread_invariant(engine, &option, &heston);
+
+    let mut other_seed = engine;
+    other_seed.config.seed = Some(12);
+    assert_ne!(
+        engine.price_with_stats(&option, &bs).unwrap(),
+        other_seed.price_with_stats(&option, &bs).unwrap()
+    );
 }
 
 #[test]
@@ -300,9 +271,7 @@ fn antithetic_variates_cut_the_standard_error() {
         .price_with_stats(&option, &model)
         .unwrap();
     assert_eq!(antithetic.n_paths, plain.n_paths);
-    // Pairing Z with −Z scales the standard error by √(1 + ρ), where
-    // ρ = corr(f(Z), f(−Z)) = −0.473 for this ATM call (by quadrature), so the
-    // best possible cut is 27.4%; the estimate must match that ratio.
+    // Theoretical ratio √(1 + corr(f(Z), f(−Z))) = √(1 − 0.473) = 0.726 for this ATM call.
     let ratio = antithetic.std_error / plain.std_error;
     assert!(
         (ratio - 0.726).abs() < 0.03,
@@ -439,4 +408,24 @@ fn european_control_variate_reduces_heston_error() {
         "{plain:?} vs {controlled:?}"
     );
     assert!((controlled.price - reference).abs() < 3.0 * controlled.std_error);
+}
+
+#[test]
+fn full_truncation_ignores_the_control_variate() {
+    // Its discretised spot is not a martingale, so E[S_t] is no valid control mean.
+    let model = HestonModel::new(2.0, 0.04, 0.6, -0.7, 0.04, 0.01, 0.0).expect("model");
+    let engine = MonteCarloEngine::new(10_000, 52, Some(4))
+        .unwrap()
+        .with_heston_scheme(HestonScheme::FullTruncation);
+    let controlled = engine.with_control_variate(true);
+    let european = spot_option(100.0, 90.0, 365, OptionType::Call);
+    let asian = asian_option(OptionType::Call, AveragingType::Arithmetic);
+    assert_eq!(
+        controlled.price_with_stats(&european, &model).unwrap(),
+        engine.price_with_stats(&european, &model).unwrap()
+    );
+    assert_eq!(
+        controlled.price_with_stats(&asian, &model).unwrap(),
+        engine.price_with_stats(&asian, &model).unwrap()
+    );
 }

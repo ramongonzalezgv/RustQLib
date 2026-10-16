@@ -337,10 +337,6 @@ pub fn geometric_asian_black_scholes(
     let mean_log = spot.ln() + (model.r - model.q - 0.5 * sigma_sq) * 0.5 * ttm;
     let var_log = sigma_sq * ttm * variance_factor;
     let forward = (mean_log + 0.5 * var_log).exp();
-
-    if var_log <= 0.0 {
-        return discount * AnalyticalEngine::intrinsic(option_type, forward, strike);
-    }
     let sd = var_log.sqrt();
     let d1 = ((forward / strike).ln() + 0.5 * var_log) / sd;
     let d2 = d1 - sd;

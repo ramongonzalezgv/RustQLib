@@ -62,16 +62,8 @@ impl HestonStepper {
         };
 
         let (gamma1, gamma2) = (0.5, 0.5);
-        let (k0, k1, k2) = if sigma > DETERMINISTIC_SIGMA {
-            let lead = kappa * rho / sigma - 0.5;
-            (
-                -rho * kappa * theta * dt / sigma,
-                gamma1 * dt * lead - rho / sigma,
-                gamma2 * dt * lead + rho / sigma,
-            )
-        } else {
-            (0.0, -gamma1 * dt, -gamma2 * dt)
-        };
+        // Non-finite for σ ≤ DETERMINISTIC_SIGMA, where `qe_step` never reads them.
+        let lead = kappa * rho / sigma - 0.5;
 
         Self {
             scheme,
@@ -86,9 +78,9 @@ impl HestonStepper {
             qe: QeConstants {
                 decay,
                 decay_integral,
-                k0,
-                k1,
-                k2,
+                k0: -rho * kappa * theta * dt / sigma,
+                k1: gamma1 * dt * lead - rho / sigma,
+                k2: gamma2 * dt * lead + rho / sigma,
                 k3: gamma1 * dt * (1.0 - rho * rho),
                 k4: gamma2 * dt * (1.0 - rho * rho),
             },
@@ -162,7 +154,8 @@ impl HestonStepper {
         };
 
         // Martingale-corrected K₀* keeps E[S_{n+1} | S_n] = S_n e^{(r−q)Δ}; when
-        // the moment generating function does not exist, keep Andersen's K₀.
+        // the moment generating function does not exist, keep Andersen's K₀
+        // (that step then breaks the martingale, biasing control variates slightly).
         let k0 = log_mgf.map_or(qe.k0, |log_mgf| -log_mgf - (qe.k1 + 0.5 * qe.k3) * v);
         let diffusion = (qe.k3 * v + qe.k4 * v_next).max(0.0).sqrt();
         state.spot *= (self.drift + k0 + qe.k1 * v + qe.k2 * v_next + diffusion * z_s).exp();

@@ -1654,6 +1654,7 @@ impl PyMonteCarloEngine {
             .with_heston_scheme(heston_scheme)
             .with_antithetic(antithetic)
             .with_control_variate(control_variate);
+        inner.validate().map_err(to_py_err)?;
 
         Ok(Self { inner })
     }

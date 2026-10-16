@@ -259,11 +259,17 @@ pub(crate) enum AsianControl {
     ArithmeticAverage,
 }
 
-/// Running sum and log-sum over the monitoring points `S_0, S_Δ, …, S_T`.
+/// Running sum and, when needed, log-sum over the monitoring points `S_0, S_Δ, …, S_T`.
 pub(crate) struct Average<P> {
     pub(crate) geometric: bool,
     pub(crate) control: AsianControl,
     pub(crate) payoff: P,
+}
+
+impl<P> Average<P> {
+    fn needs_log(&self) -> bool {
+        self.geometric || self.control == AsianControl::GeometricPayoff
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -279,7 +285,7 @@ impl<P: Fn(f64) -> f64 + Sync> PathFunctional for Average<P> {
     fn start(&self, spot: f64) -> AverageAcc {
         AverageAcc {
             sum: spot,
-            log_sum: spot.ln(),
+            log_sum: if self.needs_log() { spot.ln() } else { 0.0 },
             count: 1.0,
         }
     }
@@ -287,23 +293,25 @@ impl<P: Fn(f64) -> f64 + Sync> PathFunctional for Average<P> {
     #[inline]
     fn observe(&self, acc: &mut AverageAcc, spot: f64) {
         acc.sum += spot;
-        acc.log_sum += spot.ln();
+        if self.needs_log() {
+            acc.log_sum += spot.ln();
+        }
         acc.count += 1.0;
     }
 
     #[inline]
     fn finish(&self, acc: &AverageAcc, _terminal: f64) -> Sample {
         let arithmetic = acc.sum / acc.count;
-        let geometric = (acc.log_sum / acc.count).exp();
+        let geometric = || (acc.log_sum / acc.count).exp();
         let average = if self.geometric {
-            geometric
+            geometric()
         } else {
             arithmetic
         };
         Sample {
             y: (self.payoff)(average),
             x: match self.control {
-                AsianControl::GeometricPayoff => (self.payoff)(geometric),
+                AsianControl::GeometricPayoff => (self.payoff)(geometric()),
                 AsianControl::ArithmeticAverage => arithmetic,
             },
         }
