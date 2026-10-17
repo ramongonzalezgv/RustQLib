@@ -112,7 +112,7 @@ There are no FFT, COS, MC or binomial engines for SABR.
 ## Known limitations
 
 - Hagan 2002 asymptotics: negative density at low strikes or large $\nu^2T$, and reduced accuracy for β < 1 away from ATM. The Obłój (2008) correction, arbitrage-free PDE SABR and density diagnostics are pending (#20).
-- `EuropeanOption` rejects negative $F$ and $K$, so Shifted SABR through the engine only reaches $F, K \ge 0$.
+- `EuropeanOption` rejects negative $F$ and $K$, so Shifted SABR through the engine only reaches $F, K \ge 0$ (#69).
 - `implied_volatility` requires $F, K > 0$ even for Normal SABR, so negative rates need the Shifted wrapper.
 - No implied-vol inversion: market normal vols cannot be checked against prices (#19).
 - Flat `r` (#17). No Greeks (#18).
