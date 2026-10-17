@@ -96,11 +96,12 @@ The previous default (1024, 180) had error 1.3e-2, above the bound. (1024, 140) 
 
 ## Performance
 
-From PR #27: `heston_calibration_bench` (`quantlib_utils/benches/heston_calibration_bench.rs`), 5 maturities × 20 strikes, fixed evaluation count.
+From PR #27 (grid (1024, 180), the former default): `heston_calibration_bench` (`quantlib_utils/benches/heston_calibration_bench.rs`), 5 maturities × 20 strikes, fixed evaluation count.
 
 | | Before | After |
 |---|---|---|
 | `heston_objective_5x20_surface` | 32.49 ms | 1.61 ms (20.2×) |
+| `heston_objective_5x20_surface`, current default grid (2048, 200), #52 | | 2.55 ms |
 | One objective's pricing (100 `calculate_price` vs 5 `price_strip`) | 3.79 ms | 0.181 ms |
 
 ## Design choices
