@@ -135,5 +135,4 @@ Accuracy:
 - $N$, $L$, $n$, $b$ are fixed by the user. There is no adaptive choice by maturity or model.
 - Heston and Bates cumulants come from finite differences. $c_4$ is noisy, so it is clamped at 0.
 - Heston calibration prices with the FFT (`HestonFftConfig`, see [calibration.md](calibration.md)), not COS.
-- Heston CF in the σ → 0 limit is wrong for κ = 0: #49.
 - No analytic CF gradients for calibration (#9). No Greeks (#18).

@@ -42,12 +42,14 @@ Implementation details:
 - $g$ is never formed. The log argument is computed as $\big((b+d) - (b-d)e^{-dT}\big)/(2d)$ and $D$ as $(b-d)(1-e^{-dT})(b+d)/\big(\sigma^2((b+d)-(b-d)e^{-dT})\big)$, which saves two complex divisions (#26).
 - `principal_sqrt` is an algebraic principal square root (branch cut on the negative real axis, $\operatorname{Re} d \ge 0$); it avoids `hypot` and `atan2`/`sin_cos`. `fast_ln` is the principal log $\tfrac12\ln|z|^2 + i\arg z$: it avoids `hypot` but still calls `atan2` (`arg`).
 - If $T \le 0$, $\varphi = 1$.
-- If $\sigma^2 \le 10^{-16}$, the code uses the deterministic-variance limit (wrong for $\kappa = 0$, #49):
+- If $\sigma^2 \le 10^{-16}$, the code uses the deterministic-variance limit:
 
   ```math
   \varphi(u) = \exp\!\big(iu(r-q)T - \tfrac12(u^2 + iu)\bar V\big),\quad
-  \bar V = \theta T + (v_0 - \theta)\frac{1 - e^{-\kappa T}}{\max(\kappa, 10^{-16})}
+  \bar V = \theta T + (v_0 - \theta)\frac{1 - e^{-\kappa T}}{\kappa}
   ```
+
+  The numerator is computed as $-\operatorname{expm1}(-\kappa T)$, accurate for small $\kappa T$, and the fraction is replaced by its limit $T$ when $\kappa = 0$, so $\bar V \to v_0 T$ as $\kappa \to 0$ (#49).
 
 - Cumulants for the COS range come from the default `FourierModel::cumulants`. These are numerical central differences of $\ln\operatorname{Re}\varphi(-it)$ at $t = 0$, with $h = 10^{-3}$ for $c_1, c_2$ and $h = 5\cdot10^{-2}$ for $c_4$. There are no closed-form Heston cumulants.
 
@@ -103,7 +105,8 @@ Implementation details:
 | `cos_matches_fft_for_heston_bates_and_kou` | same | 2^15-point FFT, < 1e-6 |
 | `fft_heston_matches_reference_lewis_integral` | `quantlib_engines/tests/fft_heston_engine.rs` | direct Simpson Lewis integral (same CF, so it tests the quadrature only) |
 | `fft_heston_zero_vol_of_vol_matches_black_scholes_with_integrated_variance` | same | BS with time-averaged variance, σ ∈ {0, 1e-4}, κ = 1.5, 5e-3 abs |
-| `fft_heston_put_call_parity_holds`, `fft_handles_near_degenerate_heston_parameters` | same | parity; σ = 0, κ = 1e-8, $v_0 = \theta$ vs BS (cannot detect #49, since $v_0 = \theta$) |
+| `fft_heston_put_call_parity_holds`, `fft_handles_near_degenerate_heston_parameters` | same | parity; σ = 0, κ = 1e-8, $v_0 = \theta$ vs BS |
+| `fft_and_cos_heston_zero_vol_of_vol_match_black_scholes_for_small_kappa` | same | σ = 0, $v_0 \ne \theta$, κ ∈ {0, 1e-12, 2}: FFT and COS vs BS with $\sqrt{\bar V/T}$ ($\sqrt{v_0}$ for small κ), 1e-8; κ = 0 and 1e-12 agree (#49) |
 | `heston_mc_within_three_stderr_of_fourier` | `quantlib_engines/tests/monte_carlo_engine.rs` | FFT, 3·stderr |
 | `heston_qe_is_unbiased_with_coarse_steps_when_feller_fails` | same | COS (N=1024, L=16), 32 steps, 3·stderr |
 | `heston_full_truncation_bias_shrinks_with_steps_when_feller_fails` | same | COS; bias monotone over {12, 52, 252} |
@@ -119,5 +122,4 @@ Implementation details:
 - Price-space calibration only (#19).
 - Derivative-free optimisers only; LM with analytic gradients (Cui et al. 2017) is pending (#9).
 - No Greeks (#18).
-- Bug #49: the deterministic-variance limit uses `kappa.max(1e-16)`. With $\kappa = 0$ and $\sigma = 0$ the numerator $1 - e^{-\kappa T}$ is 0, so it returns $\bar V = \theta T$ instead of $v_0 T$ (wrong whenever $v_0 \ne \theta$). Bates inherits it.
 - MC: the QE martingale correction is skipped on steps where the MGF does not exist.

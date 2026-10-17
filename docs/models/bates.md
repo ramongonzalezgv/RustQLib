@@ -64,4 +64,3 @@ No test compares prices against an independent published Bates value.
 - Flat `r`, `q` (#17).
 - No calibration, and no MC (jump simulation).
 - No Greeks (#18).
-- Inherits the Heston $\sigma \to 0$ bug (#49): with $\sigma^2 \le 10^{-16}$ and $\kappa = 0$ the diffusive part uses $\bar V = \theta T$ instead of $v_0 T$.
