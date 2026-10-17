@@ -145,7 +145,7 @@ class TestCalibrationBindings(unittest.TestCase):
             market_values=market_values,
             target="price",
             initial_sigma=0.16,
-            initial_r=0.05,
+            r=true_r,
             method="hybrid",
             objective="least_squares",
             max_generations=160,
@@ -156,7 +156,8 @@ class TestCalibrationBindings(unittest.TestCase):
         )
 
         self.assertAlmostEqual(result["model"]["sigma"], true_sigma, delta=2.0e-2)
-        self.assertAlmostEqual(result["model"]["r"], true_r, delta=2.0e-2)
+        self.assertEqual(result["model"]["r"], true_r)
+        self.assertEqual(list(result["calibrated_params"]), ["sigma"])
         self.assertLess(result["rmse"], 2.0e-2)
 
     def test_calibrate_black_scholes_from_prices(self) -> None:
@@ -189,8 +190,8 @@ class TestCalibrationBindings(unittest.TestCase):
             market_values=market_values,
             target="price",
             initial_sigma=0.15,
-            initial_r=0.01,
-            initial_q=0.00,
+            r=true_r,
+            q=true_q,
             method="hybrid",
             objective="least_squares",
             max_generations=180,
@@ -201,8 +202,8 @@ class TestCalibrationBindings(unittest.TestCase):
         )
 
         self.assertAlmostEqual(result["model"]["sigma"], true_sigma, delta=1.5e-2)
-        self.assertAlmostEqual(result["model"]["r"], true_r, delta=1.5e-2)
-        self.assertAlmostEqual(result["model"]["q"], true_q, delta=1.5e-2)
+        self.assertEqual(result["model"]["r"], true_r)
+        self.assertEqual(result["model"]["q"], true_q)
         self.assertLess(result["rmse"], 2.0e-2)
 
     def test_calibrate_sabr_surface(self) -> None:
@@ -307,12 +308,10 @@ class TestCalibrationBindings(unittest.TestCase):
             initial_sigma=0.70,
             initial_rho=-0.20,
             initial_v0=0.08,
-            initial_r=0.02,
-            initial_q=0.0,
+            r=0.02,
+            q=0.0,
             kappa_bounds=(1.8, 1.8),
             theta_bounds=(0.05, 0.05),
-            r_bounds=(0.02, 0.02),
-            q_bounds=(0.0, 0.0),
             method="nelder_mead",
             objective="least_squares",
             fft_n=512,

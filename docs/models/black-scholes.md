@@ -63,14 +63,13 @@ The spot-quoted engines require `UnderlyingQuote::Spot`, and Black-76 requires `
 
 `quantlib_utils/src/calibration.rs` (see [calibration.md](../engines/calibration.md)):
 
-- `calibrate_black_model` fits $(\sigma, r)$.
-- `calibrate_black_scholes_model` fits $(\sigma, r, q)$.
+- `calibrate_black_model` fits $\sigma$ with $r$ fixed; `calibrate_black_scholes_model` fits $\sigma$ with $r, q$ fixed (rates are market data, [0020](../decisions/0020-calibration-fixed-rates.md)).
 - The quote's `underlying` is the forward (Black) or the spot (BS).
-- `CalibrationTarget::Price`: the model value is a closed-form price. It is re-implemented in `black_price` / `black_scholes_price` rather than calling `AnalyticalEngine`.
-- `CalibrationTarget::Volatility`: the model value is `sigma` itself (flat vol), compared to the quoted implied vols.
+- `CalibrationTarget::Price`: the model value is the closed-form price from `quantlib_engines::{black_price, black_scholes_price}`, the same functions `AnalyticalEngine` uses.
+- `CalibrationTarget::Volatility` is rejected (`Validation`) until implied-vol calibration (#19): a constant-vol model would only fit a flat vol.
 - Objective: weighted least squares, relative least squares or Huber.
 - Optimiser: DE, Nelder–Mead, or DE→Nelder–Mead (default).
-- Default bounds: $\sigma \in [10^{-4}, 3]$, $r, q \in [-0.2, 0.2]$.
+- Default bounds: $\sigma \in [10^{-4}, 3]$.
 
 ## Design choices
 

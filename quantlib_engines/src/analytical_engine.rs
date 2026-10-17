@@ -15,55 +15,6 @@ impl AnalyticalEngine {
         }
     }
 
-    fn price_black_scholes(
-        &self,
-        product: &EuropeanOption,
-        model: &BlackScholesModel,
-    ) -> Result<f64, QuantLibError> {
-        let spot = product.require_spot()?;
-        let ttm = product.ttm();
-        if ttm <= 0.0 {
-            return Ok(Self::intrinsic(product.option_type, spot, product.k));
-        }
-
-        let d1 = model.d1(spot, product.k, ttm);
-        let d2 = model.d2(spot, product.k, ttm);
-
-        let discounted_spot = spot * (-(model.q) * ttm).exp();
-        let discounted_strike = product.k * (-(model.r) * ttm).exp();
-
-        let price = match product.option_type {
-            OptionType::Call => discounted_spot * norm_cdf(d1) - discounted_strike * norm_cdf(d2),
-            OptionType::Put => discounted_strike * norm_cdf(-d2) - discounted_spot * norm_cdf(-d1),
-        };
-
-        Ok(price)
-    }
-
-    fn price_black(
-        &self,
-        product: &EuropeanOption,
-        model: &BlackModel,
-    ) -> Result<f64, QuantLibError> {
-        let ttm = product.ttm();
-        let forward = product.require_forward()?;
-
-        if ttm <= 0.0 {
-            return Ok(Self::intrinsic(product.option_type, forward, product.k));
-        }
-
-        let d1 = model.d1(forward, product.k, ttm);
-        let d2 = model.d2(forward, product.k, ttm);
-        let discount = (-(model.r) * ttm).exp();
-
-        let price = match product.option_type {
-            OptionType::Call => discount * (forward * norm_cdf(d1) - product.k * norm_cdf(d2)),
-            OptionType::Put => discount * (product.k * norm_cdf(-d2) - forward * norm_cdf(-d1)),
-        };
-
-        Ok(price)
-    }
-
     fn price_digital_black_scholes(
         &self,
         product: &DigitalOption,
@@ -207,6 +158,51 @@ impl AnalyticalEngine {
     }
 }
 
+/// Black–Scholes vanilla price for a unit quantity; `ttm <= 0` returns intrinsic value.
+pub fn black_scholes_price(
+    spot: f64,
+    strike: f64,
+    ttm: f64,
+    option_type: OptionType,
+    model: &BlackScholesModel,
+) -> f64 {
+    if ttm <= 0.0 {
+        return AnalyticalEngine::intrinsic(option_type, spot, strike);
+    }
+
+    let d1 = model.d1(spot, strike, ttm);
+    let d2 = model.d2(spot, strike, ttm);
+    let discounted_spot = spot * (-model.q * ttm).exp();
+    let discounted_strike = strike * (-model.r * ttm).exp();
+
+    match option_type {
+        OptionType::Call => discounted_spot * norm_cdf(d1) - discounted_strike * norm_cdf(d2),
+        OptionType::Put => discounted_strike * norm_cdf(-d2) - discounted_spot * norm_cdf(-d1),
+    }
+}
+
+/// Black-76 vanilla price for a unit quantity; `ttm <= 0` returns intrinsic value.
+pub fn black_price(
+    forward: f64,
+    strike: f64,
+    ttm: f64,
+    option_type: OptionType,
+    model: &BlackModel,
+) -> f64 {
+    if ttm <= 0.0 {
+        return AnalyticalEngine::intrinsic(option_type, forward, strike);
+    }
+
+    let d1 = model.d1(forward, strike, ttm);
+    let d2 = model.d2(forward, strike, ttm);
+    let discount = (-model.r * ttm).exp();
+
+    match option_type {
+        OptionType::Call => discount * (forward * norm_cdf(d1) - strike * norm_cdf(d2)),
+        OptionType::Put => discount * (strike * norm_cdf(-d2) - forward * norm_cdf(-d1)),
+    }
+}
+
 impl PricingEngine<EuropeanOption, BlackScholesModel> for AnalyticalEngine {
     fn calculate_price(
         &self,
@@ -215,7 +211,13 @@ impl PricingEngine<EuropeanOption, BlackScholesModel> for AnalyticalEngine {
     ) -> Result<f64, QuantLibError> {
         product.validate()?;
         model.validate()?;
-        let unit_price = self.price_black_scholes(product, model)?;
+        let unit_price = black_scholes_price(
+            product.require_spot()?,
+            product.k,
+            product.ttm(),
+            product.option_type,
+            model,
+        );
         Ok(unit_price * f64::from(product.qty))
     }
 }
@@ -228,7 +230,13 @@ impl PricingEngine<EuropeanOption, BlackModel> for AnalyticalEngine {
     ) -> Result<f64, QuantLibError> {
         product.validate()?;
         model.validate()?;
-        let unit_price = self.price_black(product, model)?;
+        let unit_price = black_price(
+            product.require_forward()?,
+            product.k,
+            product.ttm(),
+            product.option_type,
+            model,
+        );
         Ok(unit_price * f64::from(product.qty))
     }
 }

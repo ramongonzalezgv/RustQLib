@@ -6,7 +6,9 @@ pub mod fft_engine;
 mod fourier;
 pub mod monte_carlo_engine;
 
-pub use analytical_engine::{AnalyticalEngine, geometric_asian_black_scholes};
+pub use analytical_engine::{
+    AnalyticalEngine, black_price, black_scholes_price, geometric_asian_black_scholes,
+};
 pub use batch::{calculate_prices_parallel, calculate_prices_parallel_per_model};
 pub use binomial_engine::{BinomialEngine, BinomialLevels};
 pub use cos_engine::CosEngine;

@@ -221,6 +221,8 @@ Model calibration functions with flexible optimizer/objective controls:
 - `calibrate_sabr(...)`
 - `calibrate_heston(...)`
 
+Rates are fixed inputs, not calibrated: `calibrate_black(..., initial_sigma, r, sigma_bounds)`, `calibrate_black_scholes(..., initial_sigma, r, q, sigma_bounds)`, `calibrate_heston(..., r, q, ...)`. `target="volatility"` is rejected for Black and Black–Scholes until implied-vol calibration (#19). `calibrate_heston` defaults to `fft_n=2048, fft_b=200.0`.
+
 All calibration functions return a dictionary with:
 
 - `success`, `message`, `iterations`

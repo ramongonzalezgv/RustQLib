@@ -28,6 +28,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Heston MC defaults to the QE scheme; Heston MC prices change (#29).
 - MC: per-chunk Xoshiro256++ streams (thread-count independent), streaming payoffs, `MonteCarloEngine { config }`; seeded MC outputs change; `sample_paths_*` return `SimulatedPaths` (#30).
 - Playground MC standard error comes from one run (#30).
+- Breaking: calibration treats r and q as fixed inputs (Black σ, BS σ, Heston κ θ σ ρ v₀ only; Python `r`/`q` replace `initial_r`/`initial_q` and `r_bounds`/`q_bounds` are gone), `CalibrationTarget::Volatility` is rejected for Black and BS until #19, and `HestonFftConfig::default()` is (2048, 200) after a measured error bound; `quantlib_engines::{black_price, black_scholes_price}` are the shared closed forms (#52).
 
 ### Removed
 - `BinomialLevels::level1` / `level2`, which nothing read (#51).
@@ -49,4 +50,5 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Heston control variate was ignored under full truncation, whose spot step is an exact martingale; it now applies under both schemes (#50).
 - Shifted SABR is now priced on `F + s`, `K + s`; it was priced on unshifted `F`, `K`, giving wrong prices or NaN (#48).
 - Heston CF with σ = 0: κ → 0 limit returned θT instead of v0·T integrated variance; κ = 0 now matches Black–Scholes with vol √v0 (#49).
+- DE/rand/1 sorted its mutation indices, so the base vector was always the smallest draw; seeded calibrations change (#52).
 - Binomial: `qty` is applied after the tree, so short American options no longer pick the wrong exercise branch; `BinomialEngine::default()` uses 100 steps (was 0, silently 1) and `n_steps = 0` is rejected (#51).
