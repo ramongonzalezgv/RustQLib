@@ -269,15 +269,15 @@ fn fft_and_cos_heston_zero_vol_of_vol_match_black_scholes_for_small_kappa() {
     )
     .expect("option");
     let t = option.ttm();
+    let mut small_kappa_prices = Vec::new();
 
     for kappa in [0.0, 1e-12, 2.0] {
         let heston = HestonModel::new(kappa, theta, 0.0, -0.5, v0, r, q).expect("model");
-        let decay = if kappa == 0.0 {
-            t
+        let avg_var = if kappa < 1e-6 {
+            v0
         } else {
-            -(-kappa * t).exp_m1() / kappa
+            theta + (v0 - theta) * (1.0 - (-kappa * t).exp()) / (kappa * t)
         };
-        let avg_var = (theta * t + (v0 - theta) * decay) / t;
         let bs = BlackScholesModel::new(avg_var.sqrt(), r, q).expect("bs model");
         let expected = AnalyticalEngine.calculate_price(&option, &bs).expect("bs");
 
@@ -295,5 +295,12 @@ fn fft_and_cos_heston_zero_vol_of_vol_match_black_scholes_for_small_kappa() {
             (cos - expected).abs() < 1e-8,
             "kappa={kappa}: cos={cos}, bs={expected}"
         );
+        if kappa < 1e-6 {
+            small_kappa_prices.push((fft, cos));
+        }
     }
+    let [(fft0, cos0), (fft1, cos1)] = small_kappa_prices[..] else {
+        unreachable!()
+    };
+    assert!((fft0 - fft1).abs() < 1e-8 && (cos0 - cos1).abs() < 1e-8);
 }
