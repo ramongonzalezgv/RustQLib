@@ -160,26 +160,25 @@ fn heston_full_truncation_bias_shrinks_with_steps_when_feller_fails() {
 }
 
 #[test]
-fn heston_qe_terminal_spot_is_a_martingale() {
+fn heston_terminal_spot_is_a_martingale() {
     // A call struck near zero pays S_T - K, so its price checks
-    // E[S_T]·e^{-rT} = S_0·e^{-qT} - K·e^{-rT} under the QE scheme.
+    // E[S_T]·e^{-rT} = S_0·e^{-qT} - K·e^{-rT}, even with coarse steps.
     let model = feller_violating_heston();
     let strike = 1.0e-6;
     let option = spot_option(100.0, strike, 365, OptionType::Call);
     let ttm = option.ttm();
     let expected = 100.0 * (-model.q * ttm).exp() - strike * (-model.r * ttm).exp();
 
-    let (mc, stderr) = mc_estimate(
-        &option,
-        &model,
-        500_000,
-        32,
-        HestonScheme::QuadraticExponential,
-    );
-    assert!(
-        (mc - expected).abs() < 3.0 * stderr,
-        "forward={mc}, expected={expected}, stderr={stderr}"
-    );
+    for (scheme, n_steps) in [
+        (HestonScheme::QuadraticExponential, 32),
+        (HestonScheme::FullTruncation, 4),
+    ] {
+        let (mc, stderr) = mc_estimate(&option, &model, 1_000_000, n_steps, scheme);
+        assert!(
+            (mc - expected).abs() < 3.0 * stderr,
+            "{scheme:?}: forward={mc}, expected={expected}, stderr={stderr}"
+        );
+    }
 }
 
 fn asian_option(option_type: OptionType, averaging: AveragingType) -> AsianOption {
@@ -396,36 +395,25 @@ fn european_control_variate_reduces_heston_error() {
     let reference = FFTEngine::default()
         .calculate_price(&option, &model)
         .unwrap();
-    let engine = MonteCarloEngine::new(100_000, 32, Some(4)).unwrap();
-
-    let plain = engine.price_with_stats(&option, &model).unwrap();
-    let controlled = engine
-        .with_control_variate(true)
-        .price_with_stats(&option, &model)
-        .unwrap();
-    assert!(
-        controlled.std_error < 0.5 * plain.std_error,
-        "{plain:?} vs {controlled:?}"
-    );
-    assert!((controlled.price - reference).abs() < 3.0 * controlled.std_error);
-}
-
-#[test]
-fn full_truncation_ignores_the_control_variate() {
-    // Its discretised spot is not a martingale, so E[S_t] is no valid control mean.
-    let model = HestonModel::new(2.0, 0.04, 0.6, -0.7, 0.04, 0.01, 0.0).expect("model");
-    let engine = MonteCarloEngine::new(10_000, 52, Some(4))
-        .unwrap()
-        .with_heston_scheme(HestonScheme::FullTruncation);
-    let controlled = engine.with_control_variate(true);
-    let european = spot_option(100.0, 90.0, 365, OptionType::Call);
-    let asian = asian_option(OptionType::Call, AveragingType::Arithmetic);
-    assert_eq!(
-        controlled.price_with_stats(&european, &model).unwrap(),
-        engine.price_with_stats(&european, &model).unwrap()
-    );
-    assert_eq!(
-        controlled.price_with_stats(&asian, &model).unwrap(),
-        engine.price_with_stats(&asian, &model).unwrap()
-    );
+    for (scheme, n_steps) in [
+        (HestonScheme::QuadraticExponential, 32),
+        (HestonScheme::FullTruncation, 252),
+    ] {
+        let engine = MonteCarloEngine::new(100_000, n_steps, Some(4))
+            .unwrap()
+            .with_heston_scheme(scheme);
+        let plain = engine.price_with_stats(&option, &model).unwrap();
+        let controlled = engine
+            .with_control_variate(true)
+            .price_with_stats(&option, &model)
+            .unwrap();
+        assert!(
+            controlled.std_error < 0.5 * plain.std_error,
+            "{scheme:?}: {plain:?} vs {controlled:?}"
+        );
+        assert!(
+            (controlled.price - reference).abs() < 3.0 * controlled.std_error,
+            "{scheme:?}: {controlled:?}, fft={reference}"
+        );
+    }
 }

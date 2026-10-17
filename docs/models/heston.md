@@ -70,7 +70,7 @@ Implementation details:
     | 52 | +1.431 | +0.115 | −0.005 |
 
     QE at 32 steps beats any Euler variant at 252 steps.
-  - **Control variate**: European and digital options use $S_T$ with $E = S_0 e^{(r-q)T}$, and Asians use the arithmetic average. The control is applied only under QE. Under full truncation it is ignored, because that discretised spot is not a martingale.
+  - **Control variate**: European and digital options use $S_T$ with $E = S_0 e^{(r-q)T}$, and Asians use the arithmetic average. The control applies under both schemes: each discretised spot is an exact martingale, except QE steps that fall back to $K_0$ ([0018](../decisions/0018-control-variate-both-heston-schemes.md)).
 - **Analytical / binomial**: not supported.
 
 ## Calibration
@@ -107,8 +107,8 @@ Implementation details:
 | `heston_mc_within_three_stderr_of_fourier` | `quantlib_engines/tests/monte_carlo_engine.rs` | FFT, 3·stderr |
 | `heston_qe_is_unbiased_with_coarse_steps_when_feller_fails` | same | COS (N=1024, L=16), 32 steps, 3·stderr |
 | `heston_full_truncation_bias_shrinks_with_steps_when_feller_fails` | same | COS; bias monotone over {12, 52, 252} |
-| `heston_qe_terminal_spot_is_a_martingale` | same | $S_0e^{-qT} - Ke^{-rT}$ |
-| `european_control_variate_reduces_heston_error`, `full_truncation_ignores_the_control_variate` | same | FFT; control-variate gating |
+| `heston_terminal_spot_is_a_martingale` | same | $S_0e^{-qT} - Ke^{-rT}$, QE and FT |
+| `european_control_variate_reduces_heston_error` | same | FFT, QE and FT; SE cut |
 | `mc_heston_european_deterministic_zero_variance` | `quantlib_engines/src/monte_carlo_engine/mod.rs` | deterministic forward, 1e-10 |
 | `test_qe_matches_fourier_when_feller_fails` | `quantlib_py/tests/test_heston_mc_scheme.py` | COS, delta 0.08 |
 | `calibrates_heston_surface_from_fft_prices`, `heston_calibration_prices_quotes_at_their_exact_maturity`, `heston_calibration_keeps_quote_order_across_maturities_and_spots` | `quantlib_utils/src/calibration.rs` | parameter recovery; direct price at T = 1/12 to 1e-10 rel |

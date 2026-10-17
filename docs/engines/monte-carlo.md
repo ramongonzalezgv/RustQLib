@@ -74,13 +74,12 @@ If $M_{2,x} = 0$ the control is skipped.
 
 | Product | Model | Control $X$ (undiscounted) | $\mathbb E[X]$ |
 |---|---|---|---|
-| European, digital | BS, Heston QE | $S_T$ | $S_0e^{(r-q)T}$ |
+| European, digital | BS, Heston | $S_T$ | $S_0e^{(r-q)T}$ |
 | Arithmetic Asian | BS | Same payoff on the geometric average (same fixings) | `qty` · `geometric_asian_black_scholes(…, Some(n_steps))` · $e^{rT}$ |
-| Arithmetic Asian | Heston QE | Arithmetic average of $S$ | $\frac{S_0}{n+1}\sum_{i=0}^{n} e^{(r-q)i\Delta}$ |
-| Geometric Asian | BS, Heston QE | Arithmetic average of $S$ | same |
-| any | Heston full truncation | **none**: the flag is ignored (bug, #50) | – |
+| Arithmetic Asian | Heston | Arithmetic average of $S$ | $\frac{S_0}{n+1}\sum_{i=0}^{n} e^{(r-q)i\Delta}$ |
+| Geometric Asian | BS, Heston | Arithmetic average of $S$ | same |
 
-Every control mean above assumes $\mathbb E[S_t] = S_0e^{(r-q)t}$ for the discretised spot. Under Heston the control is applied only with QE (`McModel::martingale`); with full truncation `control_variate = true` is silently ignored. That gate is a bug (#50): the full-truncation spot step is conditionally log-normal with mean $S_ne^{(r-q)\Delta}$ given $v_n$, so it is an exact discrete martingale and the control means hold. Under QE they hold except on steps that fall back to $K_0$.
+Every control mean above assumes $\mathbb E[S_t] = S_0e^{(r-q)t}$ for the discretised spot. Under Heston this holds for both schemes: the full-truncation spot step is conditionally log-normal with mean $S_ne^{(r-q)\Delta}$ given $v_n$, so it is an exact discrete martingale; QE holds except on steps that fall back to $K_0$ ([0018](../decisions/0018-control-variate-both-heston-schemes.md), #50).
 
 ## `sample_paths`
 
@@ -92,7 +91,7 @@ Every control mean above assumes $\mathbb E[S_t] = S_0e^{(r-q)t}$ for the discre
 |---|---|---|
 | `MonteCarloEngine`, `with_*` builders | `mod.rs` | Engine and config setters. |
 | `MonteCarloPricing<P, M>::price_with_stats` | `mod.rs` | Three generic impls (European, Digital, Asian) over `McModel`; `PricingEngine::calculate_price` returns `.price`. |
-| `McModel` (private) | `mod.rs` | `rates`, `path`, `terminal_steps` (BS 1, Heston `n_steps`), `martingale(scheme)`, `geometric_asian` (BS only). |
+| `McModel` (private) | `mod.rs` | `rates`, `path`, `terminal_steps` (BS 1, Heston `n_steps`), `geometric_asian` (BS only). |
 | `estimate`, `price_terminal`, `expected_arithmetic_average` | `mod.rs` | Build the functional and control mean, run, discount. |
 | `MonteCarloConfig`, `HestonScheme`, `McEstimate` | `core.rs` | Config, scheme enum (`"qe"`, `"full_truncation"`/`"ft"`), result. |
 | `chunk_rng`, `splitmix64` | `core.rs` | Per-chunk streams. |
@@ -161,13 +160,13 @@ QE costs about 8% more per step than full truncation (100k × 252: 360 vs 337 ms
 | `heston_mc_within_three_stderr_of_fourier` | same | QE, 160k paths, 200 steps vs FFT. |
 | `heston_qe_is_unbiased_with_coarse_steps_when_feller_fails` | same | 32 steps, 500k paths vs COS(1024, 16). |
 | `heston_full_truncation_bias_shrinks_with_steps_when_feller_fails` | same | 200k paths; bias decreasing over {12, 52, 252}; < 3 SE at 252. |
-| `heston_qe_terminal_spot_is_a_martingale` | same | Feller-violating case, 32 steps, 500k paths: near-zero-strike call = discounted forward within 3 SE. |
+| `heston_terminal_spot_is_a_martingale` | same | Feller-violating case (σ = 1), 1e6 paths, QE at 32 steps and FT at 4: near-zero-strike call = discounted forward within 3 SE. |
 | `seeded_prices_are_bit_identical_for_any_thread_count` | same | Arithmetic Asian, BS and Heston, antithetic + control: serial = 1/2/8 threads. |
 | `standard_error_has_nominal_coverage` | same | 200 runs × 20k paths, ±1.96 SE coverage in [0.90, 0.99]. |
 | `antithetic_variates_cut_the_standard_error` | same | ATM BS call, 200k paths: SE ratio 0.726 ± 0.03. |
 | `geometric_asian_closed_form_matches_monte_carlo` | same | 1e6 paths, n ∈ {12, 52, 252}. |
 | `geometric_control_variate_cuts_arithmetic_asian_error_tenfold`, `control_variate_matches_large_plain_reference` (`#[ignore]`) | same | 50k paths: > 10× SE cut; 100k controlled paths vs a 1e7-path plain run within 3 SE. |
-| `european_control_variate_reduces_heston_error`, `full_truncation_ignores_the_control_variate` | same | Heston QE, K = 90, 100k × 32: SE more than halved, within 3 SE of FFT. FT: the flag changes nothing (pins the #50 bug). |
+| `european_control_variate_reduces_heston_error` | same | Heston K = 90, 100k paths, QE × 32 and FT × 252: SE more than halved, within 3 SE of FFT. |
 | `sampled_paths_have_expected_shape_and_terminal_mean` | same | Shape, $S_0$, $\mathbb E[S_T]$. |
 | `arithmetic_asian_peak_heap_does_not_grow_with_paths` | `tests/mc_memory.rs` | Peak heap growth < 1 MB for 1e6 paths. |
 | `merged_chunk_moments_match_one_pass`, `antithetic_counts_both_legs_of_each_pair`, `mc_heston_european_deterministic_zero_variance`, `mc_asian_with_zero_vol_matches_discounted_deterministic_payoff`, `mc_digital_bs_is_close_to_analytical` | `src/monte_carlo_engine/mod.rs` | Merge, path count, degenerate limits. |
@@ -179,5 +178,4 @@ QE costs about 8% more per step than full truncation (100k × 252: 360 vs 337 ms
 - No American or path-dependent barrier products. `MonteCarloEngine` does not implement `PricingEngine<AmericanOption, _>`.
 - The Asian functional has no fixing schedule: fixings are $n_{\text{steps}}+1$ equally spaced points including $S_0$. It does not use the schedules from #47.
 - Results depend on `chunk_size` and change whenever the RNG layout changes.
-- `control_variate` is ignored under Heston full truncation, although the FT spot step is an exact martingale. Bug: #50.
 - No pathwise or likelihood-ratio Greeks: #18.

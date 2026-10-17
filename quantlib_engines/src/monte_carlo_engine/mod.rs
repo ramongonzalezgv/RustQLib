@@ -23,11 +23,11 @@ use paths::{
 /// Use [`MonteCarloEngine::price_with_stats`] for the price with its standard
 /// error. Variance reduction is opt-in:
 /// - `antithetic`: each normal vector `Z` is paired with `−Z`.
-/// - `control_variate`: European and digital options use the discounted
-///   terminal spot (`E = S_0 e^{−qT}`); arithmetic Asians under Black–Scholes
+/// - `control_variate`: European and digital options use the terminal spot
+///   (`E[S_T] = S_0 e^{(r−q)T}`); arithmetic Asians under Black–Scholes
 ///   use the geometric Asian (closed form); other Asians use the arithmetic
-///   average of the spot (`E[S_t] = S_0 e^{(r−q)t}`). Ignored under Heston
-///   full truncation, whose discretised spot is not a martingale.
+///   average of the spot (`E[S_t] = S_0 e^{(r−q)t}`). Both Heston schemes
+///   keep the discretised spot a martingale, so these means are exact.
 ///
 /// Black–Scholes European and digital options are simulated with one exact
 /// log-normal step; Heston and Asian options use `n_steps` steps.
@@ -72,8 +72,6 @@ trait McModel: Sync {
     fn path(&self, spot: f64, dt: f64, scheme: HestonScheme) -> Self::Path;
     /// Steps for a terminal payoff.
     fn terminal_steps(n_steps: usize) -> usize;
-    /// Whether the discretised spot is a martingale, as every control mean assumes.
-    fn martingale(scheme: HestonScheme) -> bool;
     /// Undiscounted closed-form geometric Asian, the control for an arithmetic one.
     fn geometric_asian(&self, _product: &AsianOption, _n_steps: usize) -> Option<f64> {
         None
@@ -97,10 +95,6 @@ impl McModel for BlackScholesModel {
 
     fn terminal_steps(_n_steps: usize) -> usize {
         1
-    }
-
-    fn martingale(_scheme: HestonScheme) -> bool {
-        true
     }
 
     fn geometric_asian(&self, product: &AsianOption, n_steps: usize) -> Option<f64> {
@@ -128,10 +122,6 @@ impl McModel for HestonModel {
 
     fn terminal_steps(n_steps: usize) -> usize {
         n_steps
-    }
-
-    fn martingale(scheme: HestonScheme) -> bool {
-        scheme == HestonScheme::QuadraticExponential
     }
 }
 
@@ -240,12 +230,10 @@ impl MonteCarloEngine {
         functional: &F,
         control_mean: f64,
     ) -> McEstimate {
-        let scheme = self.config.heston_scheme;
-        let path = model.path(spot, ttm / n_steps as f64, scheme);
+        let path = model.path(spot, ttm / n_steps as f64, self.config.heston_scheme);
         let seed = self.config.resolved_seed();
         let moments = simulate(&self.config, seed, &path, functional, n_steps);
-        let control =
-            (self.config.control_variate && M::martingale(scheme)).then_some(control_mean);
+        let control = self.config.control_variate.then_some(control_mean);
         let discount = (-model.rates().0 * ttm).exp();
         moments.estimate(discount, control, self.config.simulated_paths())
     }

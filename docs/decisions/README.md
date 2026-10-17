@@ -19,3 +19,4 @@ Context, decision, alternatives and consequences of each design choice. Never ed
 - [0015](0015-agents-process.md) AGENTS.md: least code, independent write / review / test (#30)
 - [0016](0016-schedules-holiday-calendars.md) Schedules and holiday calendars, split out of #17 (#47)
 - [0017](0017-docs-as-code.md) Documentation as part of done
+- [0018](0018-control-variate-both-heston-schemes.md) Control variates under both Heston schemes (#50)

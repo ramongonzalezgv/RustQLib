@@ -1,5 +1,5 @@
 # 0014. Control variates only under martingale-preserving discretisations
-Status: Accepted (2026-10-16, PR #30 review round, issue #11)
+Status: Superseded by 0018
 
 ## Context
 Every control mean (E[S_T] = S₀e^{(r−q)T}, E[S_t]) assumes the discretised spot is an exact martingale. Heston full truncation is not, so its control-variate estimate was biased; the independent review of 7c858c4 found it.
