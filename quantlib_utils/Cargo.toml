@@ -14,6 +14,7 @@ rayon = "1.10"
 
 [dev-dependencies]
 criterion = "0.5"
+quantlib_products = { path = "../quantlib_products" }
 
 [[bench]]
 name = "heston_calibration_bench"

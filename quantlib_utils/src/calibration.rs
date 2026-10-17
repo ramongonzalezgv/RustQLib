@@ -1910,3 +1910,78 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod de_base_index_tests {
+    use std::sync::Mutex;
+
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+
+    use super::{DifferentialEvolutionConfig, differential_evolution};
+
+    /// DE/rand/1 base index `a` must be uniform over the P-1 indices other than the target.
+    /// Decodes (a, b, c) from the recorded first generation of a 1-D DE run:
+    /// trial_i = x_a + F (x_b - x_c). The sorted-indices bug makes `a` the smallest of the three.
+    #[test]
+    fn de_base_index_is_uniform() {
+        const P: usize = 10;
+        const F: f64 = 0.5;
+        const RUNS: u64 = 100_000;
+        let config = |seed| DifferentialEvolutionConfig {
+            max_generations: 1,
+            population_size: P,
+            differential_weight: F,
+            crossover_probability: 1.0,
+            seed,
+            parallel_objective: false,
+            ..DifferentialEvolutionConfig::default()
+        };
+        let mut counts = [[0u32; P]; P];
+        let mut kept = [0u32; P];
+        let mut guess_rng = ChaCha8Rng::seed_from_u64(1 << 40);
+        for seed in 0..RUNS {
+            let seen = Mutex::new(Vec::new());
+            let objective = |x: &[f64]| {
+                seen.lock().unwrap().push(x[0]);
+                Ok(x[0])
+            };
+            // Random guess so population[0] is exchangeable with the other members.
+            let guess = guess_rng.random_range(-1.0..=1.0);
+            differential_evolution(&objective, &[guess], &[(-1.0, 1.0)], &config(seed))
+                .expect("de");
+            let seen = seen.into_inner().unwrap();
+            let (pop, trials) = (&seen[..P], &seen[P..2 * P]);
+            for (i, &trial) in trials.iter().enumerate() {
+                if trial.abs() >= 1.0 {
+                    continue; // clamped to a bound: not decodable
+                }
+                let mut hits = Vec::new();
+                for a in (0..P).filter(|&a| a != i) {
+                    for b in (0..P).filter(|&b| b != i && b != a) {
+                        for c in (0..P).filter(|&c| c != i && c != a && c != b) {
+                            if (pop[a] + F * (pop[b] - pop[c]) - trial).abs() < 1e-12 {
+                                hits.push(a);
+                            }
+                        }
+                    }
+                }
+                assert_eq!(hits.len(), 1, "ambiguous or undecodable trial");
+                counts[i][hits[0]] += 1;
+                kept[i] += 1;
+            }
+        }
+        let p = 1.0 / (P as f64 - 1.0);
+        for i in 0..P {
+            let n = f64::from(kept[i]);
+            let bound = 4.0 * (p * (1.0 - p) / n).sqrt();
+            for a in (0..P).filter(|&a| a != i) {
+                let freq = f64::from(counts[i][a]) / n;
+                assert!(
+                    (freq - p).abs() <= bound,
+                    "target {i}: base index {a} frequency {freq:.4} vs {p:.4} +- {bound:.4}"
+                );
+            }
+        }
+    }
+}
