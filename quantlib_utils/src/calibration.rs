@@ -1763,8 +1763,9 @@ mod de_base_index_tests {
     #[test]
     fn de_base_index_is_uniform() {
         const P: usize = 10;
-        const F: f64 = 0.5;
-        const RUNS: u64 = 100_000;
+        const F: f64 = 0.1;
+        // F is the minimum DE allows, so few trials clamp; the surplus keeps >= 1e5 decodable draws per target.
+        const RUNS: u64 = 110_000;
         let config = |seed| DifferentialEvolutionConfig {
             max_generations: 1,
             population_size: P,
@@ -1810,6 +1811,11 @@ mod de_base_index_tests {
         }
         let p = 1.0 / (P as f64 - 1.0);
         for i in 0..P {
+            assert!(
+                kept[i] >= 100_000,
+                "target {i}: only {} decodable draws",
+                kept[i]
+            );
             let n = f64::from(kept[i]);
             let bound = 4.0 * (p * (1.0 - p) / n).sqrt();
             for a in (0..P).filter(|&a| a != i) {
