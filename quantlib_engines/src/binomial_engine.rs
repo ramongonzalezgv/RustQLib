@@ -293,27 +293,37 @@ mod tests {
         );
     }
 
-    #[test]
-    fn short_position_negates_price_and_zero_steps_rejected() {
-        let model = BlackScholesModel::new(0.2, 0.08, 0.0).expect("model");
-        let put = |qty| {
-            AmericanOption::new_spot(
-                100.0,
-                110.0,
-                SimpleDate::new(2027, 2, 10).expect("date"),
-                Some(SimpleDate::new(2026, 2, 10).expect("date")),
-                OptionType::Put,
-                qty,
-                None,
-            )
-            .expect("option")
-        };
-        let engine = BinomialEngine::default();
-        let long = engine.calculate_price(&put(1), &model).expect("long");
-        let short = engine.calculate_price(&put(-1), &model).expect("short");
-        assert!(long > 0.0 && short == -long, "long={long}, short={short}");
+    fn american_put(qty: i32) -> AmericanOption {
+        AmericanOption::new_spot(
+            100.0,
+            110.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Put,
+            qty,
+            None,
+        )
+        .expect("option")
+    }
 
+    #[test]
+    fn short_position_negates_price() {
+        let model = BlackScholesModel::new(0.2, 0.08, 0.0).expect("model");
+        let engine = BinomialEngine::default();
+        let long = engine
+            .calculate_price(&american_put(1), &model)
+            .expect("long");
+        let short = engine
+            .calculate_price(&american_put(-1), &model)
+            .expect("short");
+        assert!(long > 0.0 && short == -long, "long={long}, short={short}");
+    }
+
+    #[test]
+    fn zero_steps_rejected() {
+        assert_eq!(BinomialEngine::default().n_steps, 100);
+        let model = BlackScholesModel::new(0.2, 0.08, 0.0).expect("model");
         let zero = BinomialEngine { n_steps: 0 };
-        assert!(zero.calculate_price(&put(1), &model).is_err());
+        assert!(zero.calculate_price(&american_put(1), &model).is_err());
     }
 }
