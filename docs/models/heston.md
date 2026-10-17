@@ -79,10 +79,10 @@ Implementation details:
 
 `calibrate_heston_model` (`quantlib_utils/src/calibration.rs`; see [calibration.md](../engines/calibration.md)):
 
-- Fits all 7 fields, including `r` and `q`. To fix a parameter, set its lower bound equal to its upper bound.
-- Default bounds: $\kappa \in [10^{-4}, 20]$, $\theta \in [10^{-5}, 2]$, $\sigma \in [10^{-4}, 5]$, $\rho \in [-0.999, 0.999]$, $v_0 \in [10^{-5}, 2]$, $r, q \in [-0.2, 0.2]$.
+- Fits $(\kappa, \theta, \sigma, \rho, v_0)$. `r` and `q` are taken unchanged from `initial_model` ([0020](../decisions/0020-calibration-fixed-rates.md)). To fix a parameter, set its lower bound equal to its upper bound.
+- Default bounds: $\kappa \in [10^{-4}, 20]$, $\theta \in [10^{-5}, 2]$, $\sigma \in [10^{-4}, 5]$, $\rho \in [-0.999, 0.999]$, $v_0 \in [10^{-5}, 2]$.
 - Price quotes only.
-- Model prices come from `FFTEngine::price_strip` with `HestonFftConfig` (default n = 1024, b = 180, cubic).
+- Model prices come from `FFTEngine::price_strip` with `HestonFftConfig` (default n = 2048, b = 200, cubic; max price error 4.7e-4 per 100 spot, see [calibration.md](../engines/calibration.md)).
 - Quotes are grouped once by bit-exact `(maturity, underlying)`. Each group is one FFT strip, priced at its exact float maturity (#4/#27, 20× faster objective).
 - Objective: weighted least squares, relative least squares or Huber. Optimiser: DE→Nelder–Mead by default.
 - A parameter set that fails `validate()` or gives a non-finite objective scores `1e300`.

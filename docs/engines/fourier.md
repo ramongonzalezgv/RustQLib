@@ -134,5 +134,5 @@ Accuracy:
 - The default FFT grid is interpolation-limited at short maturities ($\Delta k \approx 0.031$ against $\sigma\sqrt T \approx 0.06$ at T = 0.1). Raise `n` and `b` together, keeping $\Delta u$ fixed.
 - $N$, $L$, $n$, $b$ are fixed by the user. There is no adaptive choice by maturity or model.
 - Heston and Bates cumulants come from finite differences. $c_4$ is noisy, so it is clamped at 0.
-- Heston calibration prices with the FFT (`HestonFftConfig`, see [calibration.md](calibration.md)), not COS.
+- Heston calibration prices with the FFT (`HestonFftConfig`, default (2048, 200) chosen by measured error, see [calibration.md](calibration.md)), not COS.
 - No analytic CF gradients for calibration (#9). No Greeks (#18).

@@ -21,3 +21,4 @@ Context, decision, alternatives and consequences of each design choice. Never ed
 - [0017](0017-docs-as-code.md) Documentation as part of done
 - [0018](0018-control-variate-both-heston-schemes.md) Control variates under both Heston schemes (#50)
 - [0019](0019-tiered-agent-pipeline.md) Tiered agent pipeline with blind spec tests
+- [0020](0020-calibration-fixed-rates.md) Calibration: fixed rates, no flat-vol target, unsorted DE, measured FFT default (#52)

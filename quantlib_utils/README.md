@@ -41,6 +41,8 @@ Calibrators return `(model, CalibrationResult)` where `CalibrationResult` includ
 To freeze a parameter while calibrating, set equal bounds for that parameter, e.g.
 `(0.02, 0.02)`.
 
+Rates are inputs, not calibrated: Black takes `r`, Black–Scholes `r` and `q`, Heston reads them from `initial_model`. The `Volatility` target is rejected for Black and Black–Scholes until implied-vol calibration (#19).
+
 ## Rust Example (Black-Scholes)
 
 ```rust

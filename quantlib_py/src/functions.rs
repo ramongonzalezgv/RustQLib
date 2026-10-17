@@ -2013,9 +2013,8 @@ fn price_asian_monte_carlo_heston_batch_numpy<'py>(
     target = "price",
     weights = None,
     initial_sigma = 0.2,
-    initial_r = 0.02,
+    r = 0.02,
     sigma_bounds = (1.0e-4, 3.0),
-    r_bounds = (-0.2, 0.2),
     method = "hybrid",
     objective = "least_squares",
     huber_delta = None,
@@ -2036,9 +2035,8 @@ fn calibrate_black<'py>(
     target: &str,
     weights: Option<Vec<f64>>,
     initial_sigma: f64,
-    initial_r: f64,
+    r: f64,
     sigma_bounds: (f64, f64),
-    r_bounds: (f64, f64),
     method: &str,
     objective: &str,
     huber_delta: Option<f64>,
@@ -2097,15 +2095,14 @@ fn calibrate_black<'py>(
         });
     }
 
-    let bounds = [sigma_bounds, r_bounds];
     let (model, result) = py
         .detach(move || {
             calibrate_black_model(
                 &quotes,
                 target,
                 initial_sigma,
-                initial_r,
-                Some(bounds),
+                r,
+                Some([sigma_bounds]),
                 &config,
             )
         })
@@ -2131,11 +2128,9 @@ fn calibrate_black<'py>(
     target = "price",
     weights = None,
     initial_sigma = 0.2,
-    initial_r = 0.02,
-    initial_q = 0.0,
+    r = 0.02,
+    q = 0.0,
     sigma_bounds = (1.0e-4, 3.0),
-    r_bounds = (-0.2, 0.2),
-    q_bounds = (-0.2, 0.2),
     method = "hybrid",
     objective = "least_squares",
     huber_delta = None,
@@ -2156,11 +2151,9 @@ fn calibrate_black_scholes<'py>(
     target: &str,
     weights: Option<Vec<f64>>,
     initial_sigma: f64,
-    initial_r: f64,
-    initial_q: f64,
+    r: f64,
+    q: f64,
     sigma_bounds: (f64, f64),
-    r_bounds: (f64, f64),
-    q_bounds: (f64, f64),
     method: &str,
     objective: &str,
     huber_delta: Option<f64>,
@@ -2219,16 +2212,15 @@ fn calibrate_black_scholes<'py>(
         });
     }
 
-    let bounds = [sigma_bounds, r_bounds, q_bounds];
     let (model, result) = py
         .detach(move || {
             calibrate_black_scholes_model(
                 &quotes,
                 target,
                 initial_sigma,
-                initial_r,
-                initial_q,
-                Some(bounds),
+                r,
+                q,
+                Some([sigma_bounds]),
                 &config,
             )
         })
@@ -2377,20 +2369,18 @@ fn calibrate_sabr<'py>(
     initial_sigma = 0.4,
     initial_rho = -0.5,
     initial_v0 = 0.04,
-    initial_r = 0.02,
-    initial_q = 0.0,
+    r = 0.02,
+    q = 0.0,
     kappa_bounds = (1.0e-4, 20.0),
     theta_bounds = (1.0e-5, 2.0),
     sigma_bounds = (1.0e-4, 5.0),
     rho_bounds = (-0.999, 0.999),
     v0_bounds = (1.0e-5, 2.0),
-    r_bounds = (-0.2, 0.2),
-    q_bounds = (-0.2, 0.2),
     method = "hybrid",
     objective = "least_squares",
     huber_delta = None,
-    fft_n = 1024,
-    fft_b = 180.0,
+    fft_n = HestonFftConfig::default().n,
+    fft_b = HestonFftConfig::default().b,
     fft_interp = "cubic",
     max_generations = 240,
     population_size = 36,
@@ -2412,15 +2402,13 @@ fn calibrate_heston<'py>(
     initial_sigma: f64,
     initial_rho: f64,
     initial_v0: f64,
-    initial_r: f64,
-    initial_q: f64,
+    r: f64,
+    q: f64,
     kappa_bounds: (f64, f64),
     theta_bounds: (f64, f64),
     sigma_bounds: (f64, f64),
     rho_bounds: (f64, f64),
     v0_bounds: (f64, f64),
-    r_bounds: (f64, f64),
-    q_bounds: (f64, f64),
     method: &str,
     objective: &str,
     huber_delta: Option<f64>,
@@ -2471,8 +2459,8 @@ fn calibrate_heston<'py>(
         initial_sigma,
         initial_rho,
         initial_v0,
-        initial_r,
-        initial_q,
+        r,
+        q,
     )
     .map_err(to_py_err)?;
 
@@ -2500,8 +2488,6 @@ fn calibrate_heston<'py>(
         sigma_bounds,
         rho_bounds,
         v0_bounds,
-        r_bounds,
-        q_bounds,
     ];
 
     let (model, result) = py

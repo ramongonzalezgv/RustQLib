@@ -6,10 +6,12 @@ Bounded, derivative-free fitting of Black-76, Black–Scholes, SABR and Heston p
 
 | Function | Quotes | Model value per quote | Parameters (bounds default) |
 |---|---|---|---|
-| `calibrate_black_model(quotes, target, σ₀, r₀, bounds, config)` | `VanillaOptionCalibrationQuote` (underlying = forward) | `Price`: Black-76 price. `Volatility`: `model.sigma` | σ [1e-4, 3], r [−0.2, 0.2] |
-| `calibrate_black_scholes_model(…, q₀, …)` | same (underlying = spot) | `Price`: BS price. `Volatility`: `model.sigma` | σ [1e-4, 3], r, q [−0.2, 0.2] |
+| `calibrate_black_model(quotes, target, σ₀, r, bounds, config)` | `VanillaOptionCalibrationQuote` (underlying = forward) | `Price`: Black-76 price (`quantlib_engines::black_price`). `Volatility`: rejected (#19) | σ [1e-4, 3]; `r` fixed |
+| `calibrate_black_scholes_model(quotes, target, σ₀, r, q, bounds, config)` | same (underlying = spot) | `Price`: BS price (`quantlib_engines::black_scholes_price`). `Volatility`: rejected (#19) | σ [1e-4, 3]; `r`, `q` fixed |
 | `calibrate_sabr_model(quotes, α₀, β₀, ρ₀, ν₀, r, bounds, config)` | `SabrCalibrationQuote { forward, strike, maturity, market_volatility, weight }` | Hagan lognormal implied vol of `SabrModel::general` | α [1e-4, 3], β [0.01, 0.99], ρ [−0.999, 0.999], ν [1e-4, 3]; `r` fixed |
-| `calibrate_heston_model(quotes, initial_model, bounds, config, fft_config)` | `VanillaOptionCalibrationQuote`, `Price` only | FFT price at the quote's exact float maturity | κ [1e-4, 20], θ [1e-5, 2], σ [1e-4, 5], ρ [−0.999, 0.999], v₀ [1e-5, 2], r, q [−0.2, 0.2] |
+| `calibrate_heston_model(quotes, initial_model, bounds, config, fft_config)` | `VanillaOptionCalibrationQuote`, `Price` only | FFT price at the quote's exact float maturity | κ [1e-4, 20], θ [1e-5, 2], σ [1e-4, 5], ρ [−0.999, 0.999], v₀ [1e-5, 2]; `r`, `q` fixed from `initial_model` |
+
+`Volatility` returns `Validation` before optimising: the constant-vol models would fit a flat vol and r, q would not enter the objective. #19 (implied-vol solver) will enable it; `target` and `CalibrationTarget` stay for that. r and q are market data (#17), so they are never calibrated, and a non-finite r or q is a `Validation` error ([0020](../decisions/0020-calibration-fixed-rates.md)). `CalibrationResult.calibrated_params` lists only the fitted names.
 
 A bound with `lower == upper` pins that parameter. Bounds must be finite with lower ≤ upper, and the initial guess must lie inside them.
 
@@ -45,7 +47,7 @@ Any error inside the objective (model construction or pricing) and any non-finit
 
 **Differential evolution** (`DifferentialEvolutionConfig`), DE/rand/1/bin (Storn & Price 1997):
 - Population size is `max(population_size, 8, 6·dim)`, drawn uniformly in the bounds from `ChaCha8Rng(seed)`. Member 0 is the initial guess.
-- Mutation: $x_a + F(x_b - x_c)$ with three distinct random indices ≠ the target. The indices are sorted before use, so $a < b < c$.
+- Mutation: $x_a + F(x_b - x_c)$ with three distinct random indices ≠ the target, used in draw order (so $a$ is uniform over the other $P-1$ members).
 - Binomial crossover with probability CR, forcing one random dimension. Mutants are clamped to the bounds.
 - Greedy one-to-one selection, synchronous per generation.
 - Trial vectors are generated serially from the seeded RNG; only objective evaluation is parallel (`parallel_objective`), so results do not depend on the thread count.
@@ -75,15 +77,31 @@ Any error inside the objective (model construction or pricing) and any non-finit
 | `NelderMeadConfig` | `max_iterations` | 300 | |
 | | `tolerance` | 1e-7 | Value and simplex size. |
 | | `initial_simplex_scale` | 0.08 | Fraction of the bound width (≥ 1e-4). |
-| `HestonFftConfig` | `n`, `b`, `interp` | 1024, 180.0, `Cubic` | FFT grid used for Heston quotes. Coarser than `FFTEngine::default()` (4096, 200). |
+| `HestonFftConfig` | `n`, `b`, `interp` | 2048, `FFTEngine::DEFAULT_B` (200), `Cubic` | FFT grid used for Heston quotes; max error 4.7e-4 (below). |
+
+## Heston FFT grid
+
+The default is the cheapest power-of-two n at b = `FFTEngine::DEFAULT_B` with max absolute price error ≤ 1e-2 (S = 100, i.e. 1e-4 per unit spot). Reference: `CosEngine(2^13, L = 16)`, which agrees with FFT(2^16, 1600) to 2e-9 (`a5_reference_is_validated_against_large_fft`). Domain: K/S ∈ {0.7, …, 1.3} (step 0.1), T ∈ {0.1, 0.5, 1, 2}, r = 0.02, q = 0.01, calls and puts, (κ, θ, σ, ρ, v₀) ∈ {(2, 0.04, 0.5, −0.7, 0.04), (0.5, 0.09, 1, −0.9, 0.09), (5, 0.02, 0.3, 0, 0.01)}. Max error per grid (cubic):
+
+| n | b | max abs error |
+|---|---|---|
+| 256 | 100 / 200 | 1.3 / 6.2 |
+| 512 | 100 / 150 / 200 | 6.9e-2 / 0.35 / 1.3 |
+| 1024 | 100 / 120 / 140 / 150 / 160 / 180 / 200 / 250 | 4.7e-2 / 1.7e-2 / 5.5e-3 / 9.5e-3 / 1.0e-2 / 1.3e-2 / 2.5e-2 / 0.12 |
+| **2048** | 200 | **4.7e-4** |
+| 2048 | 100 / 150 / 180 / 250 | 4.7e-2 / 7.9e-3 / 4.3e-3 / 9.6e-4 |
+| 4096 | 200 | 4.7e-4 |
+
+The previous default (1024, 180) had error 1.3e-2, above the bound. (1024, 140) passes but its neighbours do not, so it is not a robust default. Test: `a5_default_heston_fft_grid_meets_price_error_bound`.
 
 ## Performance
 
-From PR #27: `heston_calibration_bench` (`quantlib_utils/benches/heston_calibration_bench.rs`), 5 maturities × 20 strikes, fixed evaluation count.
+From PR #27 (grid (1024, 180), the former default): `heston_calibration_bench` (`quantlib_utils/benches/heston_calibration_bench.rs`), 5 maturities × 20 strikes, fixed evaluation count.
 
 | | Before | After |
 |---|---|---|
 | `heston_objective_5x20_surface` | 32.49 ms | 1.61 ms (20.2×) |
+| `heston_objective_5x20_surface`, current default grid (2048, 200), #52 | | 2.55 ms |
 | One objective's pricing (100 `calculate_price` vs 5 `price_strip`) | 3.79 ms | 0.181 ms |
 
 ## Design choices
@@ -99,25 +117,32 @@ From PR #27: `heston_calibration_bench` (`quantlib_utils/benches/heston_calibrat
 
 | Test | Checks |
 |---|---|
-| `calibrates_black_scholes_from_price_quotes`, `calibrates_black_from_price_quotes` | Recover synthetic σ, r (and q) to 1e-2 / 1.5e-2. |
-| `calibrates_black_from_implied_vol_quotes` | σ to 1e-6 with r pinned. |
+| `calibrates_black_scholes_from_price_quotes`, `calibrates_black_from_price_quotes` | Recover synthetic σ with r (q) fixed, to 1e-2 / 1.5e-2. |
+| `de_base_index_is_uniform` | DE base index uniform over the P−1 other members, 4·√(p(1−p)/N) over 1e5 seeded runs. |
 | `calibrates_sabr_surface` | 3 maturities × 5 strikes, β pinned at 0.6, relative least squares, hybrid: α ± 3e-2, ρ ± 3e-2, ν ± 4e-2. |
-| `calibrates_heston_surface_from_fft_prices` | 2 maturities × 3 strikes × call/put from FFT(512, 120), κ, θ, r, q pinned, Nelder–Mead: σ ± 0.1, ρ ± 0.08, v₀ ± 0.02. |
+| `calibrates_heston_surface_from_fft_prices` | 2 maturities × 3 strikes × call/put from FFT(512, 120), κ, θ pinned, Nelder–Mead: σ ± 0.1, ρ ± 0.08, v₀ ± 0.02. |
 | `heston_calibration_prices_quotes_at_their_exact_maturity` | T = 1/12 (call, put) and 0.001 priced at exactly that T (1e-10 relative). |
 | `heston_calibration_keeps_quote_order_across_maturities_and_spots` | Interleaved maturities, two spots at one maturity. |
 | `supports_robust_huber_objective` | Huber objective runs and is finite (two quotes, Nelder–Mead). |
 | `rejects_quote_kind_target_mismatch` | Kind/target validation. |
+
+`quantlib_utils/tests/calibration_cleanup.rs`:
+
+| Test | Checks |
+|---|---|
+| `a1_volatility_target_rejected_for_black_and_black_scholes`, `non_finite_rates_are_validation_errors` | `Validation` errors (message names #19). |
+| `a2_*` | Round trips return σ within 1e-4 with r, q exactly as passed, and only `sigma` in `calibrated_params`; Heston keeps `initial_model`'s r, q. |
+| `api_names_and_default_bounds` | Parameter names and default bounds. |
+| `a4_*` | Calibration model values equal `AnalyticalEngine` prices to 1e-12; `calibration.rs` has no pricing formula. |
+| `a5_*` | FFT reference check and the default-grid error bound. |
 
 Python: `quantlib_py/tests/test_calibration_bindings.py` (Black, BS, SABR, partial Heston).
 
 ## Limitations and open issues
 
 - Derivative-free only. DE needs thousands of evaluations, and Nelder–Mead stalls on the κ–θ valley. Levenberg–Marquardt with analytic Heston gradients (Cui et al. 2017) and a DE→LM hybrid: #9. Parameter standard errors are also part of #9.
-- `Volatility` target for Black and BS: the model value is the constant `model.sigma` for every quote. The fit is therefore a weighted flat vol (the weighted mean under least squares), and r, q do not enter the objective, so they end wherever the optimiser leaves them: #52.
 - SABR calibrates only `SabrModel::general` (β strictly inside (0, 1)). Normal, lognormal and shifted SABR cannot be calibrated, and `r` is fixed.
-- Heston calibrates all seven parameters by default, including r and q. On small surfaces κ, θ and the rates are weakly identified; the Heston test pins them.
-- `black_price` and `black_scholes_price` duplicate `AnalyticalEngine`'s closed forms: #52.
-- Sorting the DE indices fixes the base vector to the smallest of the three draws, which departs from DE/rand/1: #52.
-- `HestonFftConfig` (1024, 180) is coarser than the FFT engine default and its price error is unmeasured: #52.
+- `Volatility` target for Black and BS is rejected until the implied-vol solver (#19).
+- Heston calibrates five parameters (r, q fixed). On small surfaces κ and θ are weakly identified; the Heston test pins them.
 - Heston pricing uses the FFT, not the faster COS engine.
 - Bates and Kou have no calibration. No calibration to American quotes (#13).

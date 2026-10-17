@@ -31,15 +31,7 @@ fn surface() -> Vec<VanillaOptionCalibrationQuote> {
 fn bench_heston_objective(c: &mut Criterion) {
     let quotes = surface();
     let model = HestonModel::new(2.0, 0.04, 0.6, -0.7, 0.04, 0.01, 0.0).expect("model");
-    let params = [
-        model.kappa,
-        model.theta,
-        model.sigma,
-        model.rho,
-        model.v0,
-        model.r,
-        model.q,
-    ];
+    let params = [model.kappa, model.theta, model.sigma, model.rho, model.v0];
     let bounds = params.map(|p| (p, p));
     let config = CalibrationConfig {
         method: CalibrationMethod::NelderMead,

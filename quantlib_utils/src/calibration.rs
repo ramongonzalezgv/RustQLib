@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use quantlib_core::{CalibrationResult, OptionType, QuantLibError, norm_cdf};
-use quantlib_engines::{FFTEngine, InterpolationKind};
+use quantlib_core::{CalibrationResult, OptionType, QuantLibError};
+use quantlib_engines::{FFTEngine, InterpolationKind, black_price, black_scholes_price};
 use quantlib_models::{BlackModel, BlackScholesModel, HestonModel, SabrModel};
 use rand::Rng;
 use rand::SeedableRng;
@@ -11,10 +11,10 @@ use rayon::prelude::*;
 const PENALTY_OBJECTIVE: f64 = 1.0e300;
 type EvaluationVectors = (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>);
 
-pub const BLACK_PARAMETER_NAMES: [&str; 2] = ["sigma", "r"];
-pub const BLACK_SCHOLES_PARAMETER_NAMES: [&str; 3] = ["sigma", "r", "q"];
+pub const BLACK_PARAMETER_NAMES: [&str; 1] = ["sigma"];
+pub const BLACK_SCHOLES_PARAMETER_NAMES: [&str; 1] = ["sigma"];
 pub const SABR_PARAMETER_NAMES: [&str; 4] = ["alpha", "beta", "rho", "nu"];
-pub const HESTON_PARAMETER_NAMES: [&str; 7] = ["kappa", "theta", "sigma", "rho", "v0", "r", "q"];
+pub const HESTON_PARAMETER_NAMES: [&str; 5] = ["kappa", "theta", "sigma", "rho", "v0"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CalibrationMethod {
@@ -94,8 +94,8 @@ pub struct HestonFftConfig {
 impl Default for HestonFftConfig {
     fn default() -> Self {
         Self {
-            n: 1 << 10,
-            b: 180.0,
+            n: 1 << 11,
+            b: FFTEngine::DEFAULT_B,
             interp: InterpolationKind::Cubic,
         }
     }
@@ -278,48 +278,53 @@ pub struct OptimizationResult {
     pub message: String,
 }
 
-pub fn default_black_bounds() -> [(f64, f64); 2] {
-    [(1.0e-4, 3.0), (-0.2, 0.2)]
+pub fn default_black_bounds() -> [(f64, f64); 1] {
+    [(1.0e-4, 3.0)]
 }
 
-pub fn default_black_scholes_bounds() -> [(f64, f64); 3] {
-    [(1.0e-4, 3.0), (-0.2, 0.2), (-0.2, 0.2)]
+pub fn default_black_scholes_bounds() -> [(f64, f64); 1] {
+    [(1.0e-4, 3.0)]
 }
 
 pub fn default_sabr_bounds() -> [(f64, f64); 4] {
     [(1.0e-4, 3.0), (0.01, 0.99), (-0.999, 0.999), (1.0e-4, 3.0)]
 }
 
-pub fn default_heston_bounds() -> [(f64, f64); 7] {
+pub fn default_heston_bounds() -> [(f64, f64); 5] {
     [
         (1.0e-4, 20.0),
         (1.0e-5, 2.0),
         (1.0e-4, 5.0),
         (-0.999, 0.999),
         (1.0e-5, 2.0),
-        (-0.2, 0.2),
-        (-0.2, 0.2),
     ]
 }
 
+/// Black-76 σ calibration with fixed `r`; `Volatility` is rejected until implied-vol calibration (#19).
 pub fn calibrate_black_model(
     quotes: &[VanillaOptionCalibrationQuote],
     target: CalibrationTarget,
     initial_sigma: f64,
-    initial_r: f64,
-    bounds: Option<[(f64, f64); 2]>,
+    r: f64,
+    bounds: Option<[(f64, f64); 1]>,
     config: &CalibrationConfig,
 ) -> Result<(BlackModel, CalibrationResult), QuantLibError> {
+    reject_volatility_target(target)?;
     validate_vanilla_quotes(quotes)?;
     validate_vanilla_quote_kinds(quotes, target)?;
 
     let bounds = bounds.unwrap_or_else(default_black_bounds).to_vec();
-    let initial = vec![initial_sigma, initial_r];
+    let initial = vec![initial_sigma];
     validate_bounds(&bounds, &initial, &BLACK_PARAMETER_NAMES)?;
+    BlackModel::new(initial_sigma, r)?;
 
+    let evaluate = |model: &BlackModel| {
+        evaluate_vanilla_quotes(quotes, |q| {
+            black_price(q.underlying, q.strike, q.maturity, q.option_type, model)
+        })
+    };
     let objective = |params: &[f64]| -> Result<f64, QuantLibError> {
-        let model = BlackModel::new(params[0], params[1])?;
-        let (_, market_values, errors, weights) = evaluate_black_quotes(&model, quotes, target)?;
+        let (_, market_values, errors, weights) = evaluate(&BlackModel::new(params[0], r)?);
         Ok(compute_objective(
             config.objective,
             &errors,
@@ -329,9 +334,9 @@ pub fn calibrate_black_model(
     };
 
     let optimization = optimize_bounded(&objective, &initial, &bounds, config)?;
-    let model = BlackModel::new(optimization.best_params[0], optimization.best_params[1])?;
+    let model = BlackModel::new(optimization.best_params[0], r)?;
 
-    let (model_values, market_values, errors, _) = evaluate_black_quotes(&model, quotes, target)?;
+    let (model_values, market_values, errors, _) = evaluate(&model);
     let result = build_calibration_result(
         &BLACK_PARAMETER_NAMES,
         &optimization.best_params,
@@ -344,26 +349,39 @@ pub fn calibrate_black_model(
     Ok((model, result))
 }
 
+/// Black–Scholes σ calibration with fixed `r`, `q`; `Volatility` is rejected until #19.
 pub fn calibrate_black_scholes_model(
     quotes: &[VanillaOptionCalibrationQuote],
     target: CalibrationTarget,
     initial_sigma: f64,
-    initial_r: f64,
-    initial_q: f64,
-    bounds: Option<[(f64, f64); 3]>,
+    r: f64,
+    q: f64,
+    bounds: Option<[(f64, f64); 1]>,
     config: &CalibrationConfig,
 ) -> Result<(BlackScholesModel, CalibrationResult), QuantLibError> {
+    reject_volatility_target(target)?;
     validate_vanilla_quotes(quotes)?;
     validate_vanilla_quote_kinds(quotes, target)?;
 
     let bounds = bounds.unwrap_or_else(default_black_scholes_bounds).to_vec();
-    let initial = vec![initial_sigma, initial_r, initial_q];
+    let initial = vec![initial_sigma];
     validate_bounds(&bounds, &initial, &BLACK_SCHOLES_PARAMETER_NAMES)?;
+    BlackScholesModel::new(initial_sigma, r, q)?;
 
+    let evaluate = |model: &BlackScholesModel| {
+        evaluate_vanilla_quotes(quotes, |quote| {
+            black_scholes_price(
+                quote.underlying,
+                quote.strike,
+                quote.maturity,
+                quote.option_type,
+                model,
+            )
+        })
+    };
     let objective = |params: &[f64]| -> Result<f64, QuantLibError> {
-        let model = BlackScholesModel::new(params[0], params[1], params[2])?;
         let (_, market_values, errors, weights) =
-            evaluate_black_scholes_quotes(&model, quotes, target)?;
+            evaluate(&BlackScholesModel::new(params[0], r, q)?);
         Ok(compute_objective(
             config.objective,
             &errors,
@@ -373,14 +391,9 @@ pub fn calibrate_black_scholes_model(
     };
 
     let optimization = optimize_bounded(&objective, &initial, &bounds, config)?;
-    let model = BlackScholesModel::new(
-        optimization.best_params[0],
-        optimization.best_params[1],
-        optimization.best_params[2],
-    )?;
+    let model = BlackScholesModel::new(optimization.best_params[0], r, q)?;
 
-    let (model_values, market_values, errors, _) =
-        evaluate_black_scholes_quotes(&model, quotes, target)?;
+    let (model_values, market_values, errors, _) = evaluate(&model);
     let result = build_calibration_result(
         &BLACK_SCHOLES_PARAMETER_NAMES,
         &optimization.best_params,
@@ -452,7 +465,7 @@ pub fn calibrate_sabr_model(
 pub fn calibrate_heston_model(
     quotes: &[VanillaOptionCalibrationQuote],
     initial_model: HestonModel,
-    bounds: Option<[(f64, f64); 7]>,
+    bounds: Option<[(f64, f64); 5]>,
     config: &CalibrationConfig,
     fft_config: HestonFftConfig,
 ) -> Result<(HestonModel, CalibrationResult), QuantLibError> {
@@ -466,18 +479,16 @@ pub fn calibrate_heston_model(
         initial_model.sigma,
         initial_model.rho,
         initial_model.v0,
-        initial_model.r,
-        initial_model.q,
     ];
     validate_bounds(&bounds, &initial, &HESTON_PARAMETER_NAMES)?;
+    initial_model.validate()?;
+    let (r, q) = (initial_model.r, initial_model.q);
 
     let engine = FFTEngine::new(fft_config.n, fft_config.b, fft_config.interp)?;
     let strips = group_heston_strips(quotes);
 
     let objective = |params: &[f64]| -> Result<f64, QuantLibError> {
-        let model = HestonModel::new(
-            params[0], params[1], params[2], params[3], params[4], params[5], params[6],
-        )?;
+        let model = HestonModel::new(params[0], params[1], params[2], params[3], params[4], r, q)?;
 
         let (_, market_values, errors, weights) =
             evaluate_heston_quotes(&engine, &model, &strips, quotes)?;
@@ -496,8 +507,8 @@ pub fn calibrate_heston_model(
         optimization.best_params[2],
         optimization.best_params[3],
         optimization.best_params[4],
-        optimization.best_params[5],
-        optimization.best_params[6],
+        r,
+        q,
     )?;
 
     let (model_values, market_values, errors, _) =
@@ -621,56 +632,29 @@ fn validate_bounds(
     Ok(())
 }
 
-fn evaluate_black_quotes(
-    model: &BlackModel,
-    quotes: &[VanillaOptionCalibrationQuote],
-    target: CalibrationTarget,
-) -> Result<EvaluationVectors, QuantLibError> {
-    let mut model_values = Vec::with_capacity(quotes.len());
-    let mut market_values = Vec::with_capacity(quotes.len());
-    let mut errors = Vec::with_capacity(quotes.len());
-    let mut weights = Vec::with_capacity(quotes.len());
-
-    for quote in quotes {
-        let model_value = match target {
-            CalibrationTarget::Price => black_price(model, quote)?,
-            CalibrationTarget::Volatility => model.sigma,
-        };
-
-        let error = model_value - quote.market_value;
-        model_values.push(model_value);
-        market_values.push(quote.market_value);
-        errors.push(error);
-        weights.push(quote.weight);
+fn reject_volatility_target(target: CalibrationTarget) -> Result<(), QuantLibError> {
+    if target == CalibrationTarget::Volatility {
+        return Err(QuantLibError::Validation(
+            "Volatility target needs implied-vol calibration (#19); the constant-vol model would only fit a flat vol".to_owned(),
+        ));
     }
-
-    Ok((model_values, market_values, errors, weights))
+    Ok(())
 }
 
-fn evaluate_black_scholes_quotes(
-    model: &BlackScholesModel,
+fn evaluate_vanilla_quotes(
     quotes: &[VanillaOptionCalibrationQuote],
-    target: CalibrationTarget,
-) -> Result<EvaluationVectors, QuantLibError> {
-    let mut model_values = Vec::with_capacity(quotes.len());
-    let mut market_values = Vec::with_capacity(quotes.len());
-    let mut errors = Vec::with_capacity(quotes.len());
-    let mut weights = Vec::with_capacity(quotes.len());
+    price: impl Fn(&VanillaOptionCalibrationQuote) -> f64,
+) -> EvaluationVectors {
+    let model_values: Vec<f64> = quotes.iter().map(price).collect();
+    let market_values: Vec<f64> = quotes.iter().map(|quote| quote.market_value).collect();
+    let errors = model_values
+        .iter()
+        .zip(&market_values)
+        .map(|(model_value, market_value)| model_value - market_value)
+        .collect();
+    let weights = quotes.iter().map(|quote| quote.weight).collect();
 
-    for quote in quotes {
-        let model_value = match target {
-            CalibrationTarget::Price => black_scholes_price(model, quote)?,
-            CalibrationTarget::Volatility => model.sigma,
-        };
-
-        let error = model_value - quote.market_value;
-        model_values.push(model_value);
-        market_values.push(quote.market_value);
-        errors.push(error);
-        weights.push(quote.weight);
-    }
-
-    Ok((model_values, market_values, errors, weights))
+    (model_values, market_values, errors, weights)
 }
 
 fn evaluate_sabr_quotes(
@@ -860,11 +844,8 @@ where
         let mut trials = Vec::with_capacity(population_size);
 
         for candidate_index in 0..population_size {
-            let mut indices =
+            let [a, b, c] =
                 random_three_distinct_indices(population_size, candidate_index, &mut rng);
-            // Ensure a stable, deterministic ordering.
-            indices.sort_unstable();
-            let [a, b, c] = indices;
 
             let random_dimension = rng.random_range(0..dim);
             let mut trial = population[candidate_index].clone();
@@ -1332,82 +1313,10 @@ fn build_calibration_result(
     }
 }
 
-fn black_price(
-    model: &BlackModel,
-    quote: &VanillaOptionCalibrationQuote,
-) -> Result<f64, QuantLibError> {
-    let ttm = quote.maturity;
-    let forward = quote.underlying;
-
-    if ttm <= 0.0 {
-        return Ok(intrinsic(quote.option_type, forward, quote.strike));
-    }
-
-    let vol_term = model.sigma * ttm.sqrt();
-    let discount = (-model.r * ttm).exp();
-
-    if vol_term <= 1.0e-14 {
-        return Ok(discount * intrinsic(quote.option_type, forward, quote.strike));
-    }
-
-    let d1 = ((forward / quote.strike).ln() + 0.5 * model.sigma * model.sigma * ttm) / vol_term;
-    let d2 = d1 - vol_term;
-
-    let price = match quote.option_type {
-        OptionType::Call => discount * (forward * norm_cdf(d1) - quote.strike * norm_cdf(d2)),
-        OptionType::Put => discount * (quote.strike * norm_cdf(-d2) - forward * norm_cdf(-d1)),
-    };
-
-    Ok(price)
-}
-
-fn black_scholes_price(
-    model: &BlackScholesModel,
-    quote: &VanillaOptionCalibrationQuote,
-) -> Result<f64, QuantLibError> {
-    let ttm = quote.maturity;
-    let spot = quote.underlying;
-
-    if ttm <= 0.0 {
-        return Ok(intrinsic(quote.option_type, spot, quote.strike));
-    }
-
-    let vol_term = model.sigma * ttm.sqrt();
-    let discounted_spot = spot * (-model.q * ttm).exp();
-    let discounted_strike = quote.strike * (-model.r * ttm).exp();
-
-    if vol_term <= 1.0e-14 {
-        return Ok(intrinsic(
-            quote.option_type,
-            discounted_spot,
-            discounted_strike,
-        ));
-    }
-
-    let d1 = ((spot / quote.strike).ln()
-        + (model.r - model.q + 0.5 * model.sigma * model.sigma) * ttm)
-        / vol_term;
-    let d2 = d1 - vol_term;
-
-    let price = match quote.option_type {
-        OptionType::Call => discounted_spot * norm_cdf(d1) - discounted_strike * norm_cdf(d2),
-        OptionType::Put => discounted_strike * norm_cdf(-d2) - discounted_spot * norm_cdf(-d1),
-    };
-
-    Ok(price)
-}
-
-fn intrinsic(option_type: OptionType, underlying: f64, strike: f64) -> f64 {
-    match option_type {
-        OptionType::Call => (underlying - strike).max(0.0),
-        OptionType::Put => (strike - underlying).max(0.0),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use quantlib_core::{OptionType, QuantLibError};
-    use quantlib_engines::InterpolationKind;
+    use quantlib_engines::{InterpolationKind, black_price, black_scholes_price};
 
     use super::{
         CalibrationConfig, CalibrationMethod, CalibrationTarget, DifferentialEvolutionConfig,
@@ -1438,19 +1347,13 @@ mod tests {
                         strike,
                         maturity,
                         option_type,
-                        market_value: super::black_scholes_price(
+                        market_value: black_scholes_price(
+                            100.0,
+                            strike,
+                            maturity,
+                            option_type,
                             &true_model,
-                            &VanillaOptionCalibrationQuote {
-                                underlying: 100.0,
-                                strike,
-                                maturity,
-                                option_type,
-                                market_value: 0.0,
-                                market_value_kind: VanillaMarketValueKind::Price,
-                                weight: 1.0,
-                            },
-                        )
-                        .expect("price"),
+                        ),
                         market_value_kind: VanillaMarketValueKind::Price,
                         weight: 1.0,
                     };
@@ -1469,8 +1372,8 @@ mod tests {
             &quotes,
             CalibrationTarget::Price,
             0.18,
-            0.01,
-            0.00,
+            true_r,
+            true_q,
             None,
             &config,
         )
@@ -1478,8 +1381,6 @@ mod tests {
 
         assert!(result.success, "{}", result.message);
         assert!((calibrated.sigma - true_sigma).abs() < 1.0e-2);
-        assert!((calibrated.r - true_r).abs() < 1.0e-2);
-        assert!((calibrated.q - true_q).abs() < 1.0e-2);
     }
 
     #[test]
@@ -1500,19 +1401,13 @@ mod tests {
                         strike,
                         maturity,
                         option_type,
-                        market_value: super::black_price(
+                        market_value: black_price(
+                            100.0,
+                            strike,
+                            maturity,
+                            option_type,
                             &true_model,
-                            &VanillaOptionCalibrationQuote {
-                                underlying: 100.0,
-                                strike,
-                                maturity,
-                                option_type,
-                                market_value: 0.0,
-                                market_value_kind: VanillaMarketValueKind::Price,
-                                weight: 1.0,
-                            },
-                        )
-                        .expect("price"),
+                        ),
                         market_value_kind: VanillaMarketValueKind::Price,
                         weight: 1.0,
                     };
@@ -1527,13 +1422,18 @@ mod tests {
             ..CalibrationConfig::default()
         };
 
-        let (calibrated, result) =
-            calibrate_black_model(&quotes, CalibrationTarget::Price, 0.18, 0.05, None, &config)
-                .expect("calibration");
+        let (calibrated, result) = calibrate_black_model(
+            &quotes,
+            CalibrationTarget::Price,
+            0.18,
+            true_r,
+            None,
+            &config,
+        )
+        .expect("calibration");
 
         assert!(result.success, "{}", result.message);
         assert!((calibrated.sigma - true_sigma).abs() < 1.5e-2);
-        assert!((calibrated.r - true_r).abs() < 1.5e-2);
     }
 
     #[test]
@@ -1635,11 +1535,9 @@ mod tests {
         }
 
         let mut bounds = default_heston_bounds();
-        // Keep rates and weakly identified long-term moments fixed in this compact synthetic set.
+        // Keep weakly identified long-term moments fixed in this compact synthetic set.
         bounds[0] = (true_model.kappa, true_model.kappa);
         bounds[1] = (true_model.theta, true_model.theta);
-        bounds[5] = (true_model.r, true_model.r);
-        bounds[6] = (true_model.q, true_model.q);
 
         let initial_model =
             quantlib_models::HestonModel::new(1.8, 0.05, 0.7, -0.2, 0.08, 0.02, 0.0)
@@ -1720,72 +1618,19 @@ mod tests {
     }
 
     #[test]
-    fn calibrates_black_from_implied_vol_quotes() {
-        let true_sigma = 0.22;
-        let fixed_r = 0.03;
-        let quotes = vec![
-            VanillaOptionCalibrationQuote::implied_volatility(
-                100.0,
-                90.0,
-                0.5,
-                OptionType::Call,
-                true_sigma,
-                1.0,
-            ),
-            VanillaOptionCalibrationQuote::implied_volatility(
-                100.0,
-                100.0,
-                1.0,
-                OptionType::Put,
-                true_sigma,
-                1.0,
-            ),
-            VanillaOptionCalibrationQuote::implied_volatility(
-                100.0,
-                110.0,
-                2.0,
-                OptionType::Call,
-                true_sigma,
-                1.0,
-            ),
-        ];
-
-        let config = CalibrationConfig {
-            method: CalibrationMethod::NelderMead,
-            objective: ObjectiveKind::LeastSquares,
-            ..CalibrationConfig::default()
-        };
-
-        let bounds = [(1.0e-4, 2.0), (fixed_r, fixed_r)];
-        let (calibrated, result) = calibrate_black_model(
-            &quotes,
-            CalibrationTarget::Volatility,
-            0.1,
-            fixed_r,
-            Some(bounds),
-            &config,
-        )
-        .expect("calibration");
-
-        assert!(result.objective_value.is_finite());
-        assert!((calibrated.sigma - true_sigma).abs() < 1.0e-6);
-        assert!((calibrated.r - fixed_r).abs() < 1.0e-12);
-    }
-
-    #[test]
     fn rejects_quote_kind_target_mismatch() {
-        let quotes = vec![VanillaOptionCalibrationQuote::price(
+        let quotes = vec![VanillaOptionCalibrationQuote::implied_volatility(
             100.0,
             100.0,
             1.0,
             OptionType::Call,
-            10.0,
+            0.2,
             1.0,
         )];
 
         let error = calibrate_black_model(
             &quotes,
-            CalibrationTarget::Volatility,
+            CalibrationTarget::Price,
             0.2,
             0.03,
             None,
@@ -1811,15 +1656,7 @@ mod tests {
         model: quantlib_models::HestonModel,
         fft_config: HestonFftConfig,
     ) -> Vec<f64> {
-        let params = [
-            model.kappa,
-            model.theta,
-            model.sigma,
-            model.rho,
-            model.v0,
-            model.r,
-            model.q,
-        ];
+        let params = [model.kappa, model.theta, model.sigma, model.rho, model.v0];
         let config = CalibrationConfig {
             method: CalibrationMethod::NelderMead,
             nelder_mead: NelderMeadConfig {
@@ -1907,6 +1744,87 @@ mod tests {
                 (value - direct).abs() <= 1.0e-12 * direct.abs(),
                 "S={spot}, T={maturity}, K={strike}: calibration={value}, direct={direct}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod de_base_index_tests {
+    use std::sync::Mutex;
+
+    use rand::{Rng, SeedableRng};
+    use rand_chacha::ChaCha8Rng;
+
+    use super::{DifferentialEvolutionConfig, differential_evolution};
+
+    /// DE/rand/1 base index `a` must be uniform over the P-1 indices other than the target.
+    /// Decodes (a, b, c) from the recorded first generation of a 1-D DE run:
+    /// trial_i = x_a + F (x_b - x_c). The sorted-indices bug makes `a` the smallest of the three.
+    #[test]
+    fn de_base_index_is_uniform() {
+        const P: usize = 10;
+        const F: f64 = 0.1;
+        // F is the minimum DE allows, so few trials clamp; the surplus keeps >= 1e5 decodable draws per target.
+        const RUNS: u64 = 110_000;
+        let config = |seed| DifferentialEvolutionConfig {
+            max_generations: 1,
+            population_size: P,
+            differential_weight: F,
+            crossover_probability: 1.0,
+            seed,
+            parallel_objective: false,
+            ..DifferentialEvolutionConfig::default()
+        };
+        let mut counts = [[0u32; P]; P];
+        let mut kept = [0u32; P];
+        let mut guess_rng = ChaCha8Rng::seed_from_u64(1 << 40);
+        for seed in 0..RUNS {
+            let seen = Mutex::new(Vec::new());
+            let objective = |x: &[f64]| {
+                seen.lock().unwrap().push(x[0]);
+                Ok(x[0])
+            };
+            // Random guess so population[0] is exchangeable with the other members.
+            let guess = guess_rng.random_range(-1.0..=1.0);
+            differential_evolution(&objective, &[guess], &[(-1.0, 1.0)], &config(seed))
+                .expect("de");
+            let seen = seen.into_inner().unwrap();
+            let (pop, trials) = (&seen[..P], &seen[P..2 * P]);
+            for (i, &trial) in trials.iter().enumerate() {
+                if trial.abs() >= 1.0 {
+                    continue; // clamped to a bound: not decodable
+                }
+                let mut hits = Vec::new();
+                for a in (0..P).filter(|&a| a != i) {
+                    for b in (0..P).filter(|&b| b != i && b != a) {
+                        for c in (0..P).filter(|&c| c != i && c != a && c != b) {
+                            if (pop[a] + F * (pop[b] - pop[c]) - trial).abs() < 1e-12 {
+                                hits.push(a);
+                            }
+                        }
+                    }
+                }
+                assert_eq!(hits.len(), 1, "ambiguous or undecodable trial");
+                counts[i][hits[0]] += 1;
+                kept[i] += 1;
+            }
+        }
+        let p = 1.0 / (P as f64 - 1.0);
+        for i in 0..P {
+            assert!(
+                kept[i] >= 100_000,
+                "target {i}: only {} decodable draws",
+                kept[i]
+            );
+            let n = f64::from(kept[i]);
+            let bound = 4.0 * (p * (1.0 - p) / n).sqrt();
+            for a in (0..P).filter(|&a| a != i) {
+                let freq = f64::from(counts[i][a]) / n;
+                assert!(
+                    (freq - p).abs() <= bound,
+                    "target {i}: base index {a} frequency {freq:.4} vs {p:.4} +- {bound:.4}"
+                );
+            }
         }
     }
 }
