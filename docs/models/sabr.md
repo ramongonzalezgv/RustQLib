@@ -107,7 +107,7 @@ There are no FFT, COS, MC or binomial engines for SABR.
 | `calibrates_sabr_surface` | `quantlib_utils/src/calibration.rs` | recovery of $(\alpha, \rho, \nu)$ on a synthetic smile, β fixed at 0.6 by its bounds, 3e-2 |
 | `test_calibrate_sabr_surface` | `quantlib_py/tests/test_calibration_bindings.py` | Python binding |
 
-`shifted_sabr_prices_black_on_shifted_forward_and_strike`, `shifted_sabr_prices_zero_forward_and_strike_with_put_call_parity` (same file) check Shifted pricing against Black-76 on $(F+s, K+s)$ to 1e-12, and parity at $F=0$ or $K=0$.
+`shifted_sabr_prices_on_shifted_forward_and_strike`, `shifted_sabr_prices_zero_forward_and_strike_with_put_call_parity` (same file) check Shifted pricing (general, lognormal, normal and nested bases) against Black-76 (Bachelier for Normal) on $(F+s, K+s)$ to 1e-12, and parity at $F=0$ or $K=0$.
 
 ## Known limitations
 
