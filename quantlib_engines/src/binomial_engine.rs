@@ -5,15 +5,20 @@ use quantlib_products::{AmericanOption, EuropeanOption};
 #[derive(Debug, Clone)]
 pub struct BinomialLevels {
     pub price: f64,
-    pub level1: Option<Vec<f64>>,
-    pub level2: Option<Vec<f64>>,
     pub up_factor: f64,
     pub down_factor: f64,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct BinomialEngine {
+    /// Tree steps; must be >= 1.
     pub n_steps: usize,
+}
+
+impl Default for BinomialEngine {
+    fn default() -> Self {
+        Self { n_steps: 100 }
+    }
 }
 
 impl BinomialEngine {
@@ -33,7 +38,7 @@ impl BinomialEngine {
         model.validate()?;
 
         let spot = product.require_spot()?;
-        let steps = n_steps.unwrap_or(self.n_steps).max(1);
+        let steps = n_steps.unwrap_or(self.n_steps);
         price_and_levels(
             BinomialInput {
                 spot,
@@ -58,7 +63,7 @@ impl BinomialEngine {
         model.validate()?;
 
         let spot = product.european.require_spot()?;
-        let steps = n_steps.unwrap_or(self.n_steps).max(1);
+        let steps = n_steps.unwrap_or(self.n_steps);
         price_and_levels(
             BinomialInput {
                 spot,
@@ -127,11 +132,8 @@ fn price_and_levels(
     }
 
     if ttm <= 0.0 {
-        let intrinsic = intrinsic_value(option_type, spot, strike, qty);
         return Ok(BinomialLevels {
-            price: intrinsic,
-            level1: None,
-            level2: None,
+            price: intrinsic_value(option_type, spot, strike) * f64::from(qty),
             up_factor: 1.0,
             down_factor: 1.0,
         });
@@ -170,10 +172,7 @@ fn price_and_levels(
         )));
     }
 
-    let mut values = terminal_payoffs(spot, strike, option_type, qty, up, down, n_steps);
-
-    let mut level1 = None;
-    let mut level2 = None;
+    let mut values = terminal_payoffs(spot, strike, option_type, up, down, n_steps);
 
     for i in (0..n_steps).rev() {
         let mut next = vec![0.0; i + 1];
@@ -182,27 +181,18 @@ fn price_and_levels(
             let continuation = discount * (p * values[j] + (1.0 - p) * values[j + 1]);
             if american_exercise {
                 let node_spot = spot * up.powf((i - j) as f64) * down.powf(j as f64);
-                let exercise = intrinsic_value(option_type, node_spot, strike, qty);
+                let exercise = intrinsic_value(option_type, node_spot, strike);
                 next[j] = continuation.max(exercise);
             } else {
                 next[j] = continuation;
             }
         }
 
-        if i == 2 {
-            level2 = Some(next.clone());
-        }
-        if i == 1 {
-            level1 = Some(next.clone());
-        }
-
         values = next;
     }
 
     Ok(BinomialLevels {
-        price: values[0],
-        level1,
-        level2,
+        price: values[0] * f64::from(qty),
         up_factor: up,
         down_factor: down,
     })
@@ -212,7 +202,6 @@ fn terminal_payoffs(
     spot: f64,
     strike: f64,
     option_type: OptionType,
-    qty: i32,
     up: f64,
     down: f64,
     n_steps: usize,
@@ -220,17 +209,16 @@ fn terminal_payoffs(
     let mut payoffs = vec![0.0; n_steps + 1];
     for (j, payoff) in payoffs.iter_mut().enumerate() {
         let terminal_spot = spot * up.powf((n_steps - j) as f64) * down.powf(j as f64);
-        *payoff = intrinsic_value(option_type, terminal_spot, strike, qty);
+        *payoff = intrinsic_value(option_type, terminal_spot, strike);
     }
     payoffs
 }
 
-fn intrinsic_value(option_type: OptionType, spot: f64, strike: f64, qty: i32) -> f64 {
-    let unsigned = match option_type {
+fn intrinsic_value(option_type: OptionType, spot: f64, strike: f64) -> f64 {
+    match option_type {
         OptionType::Call => (spot - strike).max(0.0),
         OptionType::Put => (strike - spot).max(0.0),
-    };
-    unsigned * f64::from(qty)
+    }
 }
 
 #[cfg(test)]
@@ -303,5 +291,39 @@ mod tests {
             amer_price + 1.0e-10 >= euro_price,
             "amer={amer_price}, euro={euro_price}"
         );
+    }
+
+    fn american_put(qty: i32) -> AmericanOption {
+        AmericanOption::new_spot(
+            100.0,
+            110.0,
+            SimpleDate::new(2027, 2, 10).expect("date"),
+            Some(SimpleDate::new(2026, 2, 10).expect("date")),
+            OptionType::Put,
+            qty,
+            None,
+        )
+        .expect("option")
+    }
+
+    #[test]
+    fn short_position_negates_price() {
+        let model = BlackScholesModel::new(0.2, 0.08, 0.0).expect("model");
+        let engine = BinomialEngine::default();
+        let long = engine
+            .calculate_price(&american_put(1), &model)
+            .expect("long");
+        let short = engine
+            .calculate_price(&american_put(-1), &model)
+            .expect("short");
+        assert!(long > 0.0 && short == -long, "long={long}, short={short}");
+    }
+
+    #[test]
+    fn zero_steps_rejected() {
+        assert_eq!(BinomialEngine::default().n_steps, 100);
+        let model = BlackScholesModel::new(0.2, 0.08, 0.0).expect("model");
+        let zero = BinomialEngine { n_steps: 0 };
+        assert!(zero.calculate_price(&american_put(1), &model).is_err());
     }
 }

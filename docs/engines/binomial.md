@@ -9,12 +9,13 @@ With $\Delta = T/N$:
 $$u = e^{\sigma\sqrt\Delta},\qquad d = 1/u,\qquad p = \frac{e^{(r-q)\Delta} - d}{u - d},\qquad D = e^{-r\Delta}$$
 
 Node $(i, j)$, with $j$ down-moves after $i$ steps, has spot $S\,u^{i-j}d^{\,j}$.
-- Terminal layer: $V_{N,j} = \text{qty}\cdot(\omega(S_{N,j} - K))^+$.
+- Terminal layer: $V_{N,j} = (\omega(S_{N,j} - K))^+$.
 - Backward induction: $V_{i,j} = D\big(pV_{i+1,j} + (1-p)V_{i+1,j+1}\big)$.
-- American exercise: $V_{i,j} \leftarrow \max\big(V_{i,j},\ \text{qty}\cdot(\omega(S_{i,j} - K))^+\big)$ at every node, including the root.
+- American exercise: $V_{i,j} \leftarrow \max\big(V_{i,j},\ (\omega(S_{i,j} - K))^+\big)$ at every node, including the root.
+- Price: $\text{qty}\cdot V_{0,0}$. The tree is unsigned, so a short position is exactly the negated long price.
 
 Special cases:
-- $T \le 0$: intrinsic value, with $u = d = 1$.
+- $T \le 0$: $\text{qty}\cdot$ intrinsic value, with $u = d = 1$.
 - $|u - d| < 10^{-14}$ (σ → 0): $u = d = e^{(r-q)\Delta}$ and $p = 1$, a deterministic forward.
 - $p \notin [0, 1]$, i.e. $\sigma\sqrt\Delta$ is too small against $|r - q|\Delta$: `Engine` error.
 
@@ -24,23 +25,23 @@ CRR converges at $O(1/N)$, and the error oscillates with the parity of $N$.
 
 | Item | Role |
 |---|---|
-| `BinomialEngine { n_steps }` | `new(n)` clamps to ≥ 1. |
+| `BinomialEngine { n_steps }` | `new(n)` clamps to ≥ 1; a literal `n_steps = 0` (or `Some(0)` override) is a `Validation` error. |
 | `PricingEngine<EuropeanOption \| AmericanOption, BlackScholesModel>` | Spot-quoted products only (`require_spot`). |
 | `price_and_levels_european` / `price_and_levels_american(product, model, n_steps: Option<usize>)` | Price plus `BinomialLevels`. `None` uses `self.n_steps`. |
-| `BinomialLevels { price, level1, level2, up_factor, down_factor }` | `qty`-scaled node values at steps 1 and 2 (`level1` is `None` if $N < 2$, `level2` if $N < 3$), $u$, $d$. Meant for tree delta and gamma; nothing in the workspace reads the extra fields (#51). |
+| `BinomialLevels { price, up_factor, down_factor }` | `qty`-scaled price, $u$, $d$. |
 | `price_and_levels`, `terminal_payoffs`, `intrinsic_value` | Tree. |
 
 ## Configuration
 
 | Field | Default | Meaning |
 |---|---|---|
-| `n_steps` | `new(n)`: `max(n, 1)`. `Default`: **0**, which runs as a 1-step tree | Tree steps $N$. |
+| `n_steps` | `new(n)`: `max(n, 1)`. `Default`: 100 | Tree steps $N$; 0 is rejected. |
 
 No tree type option: CRR only.
 
 ## Design choices
 
-- `qty` is applied inside the payoff, so American exercise compares quantity-scaled values. See Limitations (#51).
+- `qty` scales the price after the tree, so American exercise is always the holder's `max` regardless of sign (#51).
 - No cache. An earlier cache keyed on too few inputs (exercise style, valuation date, calendar) and returned stale prices. Regression tests guard against its return.
 
 ## Validation
@@ -56,7 +57,7 @@ No tree type option: CRR only.
 | `american_put_matches_published_reference` | Hull American put S = K = 50, r = 10%, σ = 40%, about 5 months: 4.2842 ± 1e-2 at N = 2000. |
 | `one_engine_prices_european_and_american_independently`, `one_engine_reprices_options_that_differ_only_by_valuation_date_or_calendar` | No-cache regressions (#2). |
 
-There are also unit tests in `src/binomial_engine.rs`: `binomial_european_converges_to_analytical` and `american_put_not_cheaper_than_european_put`.
+Unit tests in `src/binomial_engine.rs`: `binomial_european_converges_to_analytical`, `american_put_not_cheaper_than_european_put`, and `short_position_negates_price_and_zero_steps_rejected` (American put, qty = −1 equals −(qty = 1); `n_steps = 0` errors; #51).
 
 ## Limitations and open issues
 
@@ -66,6 +67,4 @@ There are also unit tests in `src/binomial_engine.rs`: `binomial_european_conver
   - CRR only, with an oscillating $O(1/N)$ error that rules out Richardson extrapolation.
   - Planned: precomputed spot ladder, in-place rollback, Leisen–Reimer tree (odd $N$, $O(1/N^2)$) with Richardson, and Leisen–Reimer as the default for Americans.
 - Black–Scholes only. No discrete dividends, no Bermudan schedules.
-- `BinomialEngine::default()` has `n_steps = 0` and prices on a 1-step tree: #51.
-- With a negative `qty` (allowed: products do not validate its sign), the American `max` picks the wrong branch: it maximises the short position's value instead of the holder's: #51.
 - Fast American pricing without a tree: #13. Tree Greeks are not exposed: #18.

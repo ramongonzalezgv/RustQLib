@@ -30,6 +30,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Playground MC standard error comes from one run (#30).
 
 ### Removed
+- `BinomialLevels::level1` / `level2`, which nothing read (#51).
 - CSV fixture tests and `tests/scratchpad.rs` (#22).
 - System libm FFI (`unsafe extern "C" fn erf`) and duplicate `norm_cdf` copies (#23).
 - `OptionValuationContext`, `make_cache_key`, `SimpleLruCache`, `StochasticModel`, `FinancialProduct::get_parameters` (#28).
@@ -47,3 +48,4 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Biased Heston control variate under full truncation; it is now applied only with QE (#30).
 - Heston control variate was ignored under full truncation, whose spot step is an exact martingale; it now applies under both schemes (#50).
 - Shifted SABR is now priced on `F + s`, `K + s`; it was priced on unshifted `F`, `K`, giving wrong prices or NaN (#48).
+- Binomial: `qty` is applied after the tree, so short American options no longer pick the wrong exercise branch; `BinomialEngine::default()` uses 100 steps (was 0, silently 1) and `n_steps = 0` is rejected (#51).
