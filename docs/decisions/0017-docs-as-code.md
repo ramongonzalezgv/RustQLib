@@ -1,5 +1,5 @@
 # 0017. Documentation as part of done
-Status: Accepted (2026-10-16, branch docs/decisions-models)
+Status: Accepted (2026-10-17, PR #53)
 
 ## Context
 Design reasoning, benchmark numbers and accepted deviations lived only in PR descriptions; PR #30 noted "there is no changelog file in the repo". Model maths and limits had no home outside rustdoc and issues.

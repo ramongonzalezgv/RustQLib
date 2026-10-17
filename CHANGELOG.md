@@ -18,7 +18,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Antithetic and control variates (`antithetic`, `control_variate`), off by default (#30).
 - `geometric_asian_black_scholes`; `AnalyticalEngine` prices continuously monitored geometric Asians (#30).
 - `HolidayCalendar`, `WeekendsOnly`, `HolidayList`, `BusinessDayConvention`, `Schedule` (#47).
-- Docs: decision records, model and engine pages, AGENTS.md documentation rules; rustdoc warnings fail CI.
+- Docs: decision records, model and engine pages, AGENTS.md documentation rules; rustdoc warnings fail CI (#53).
 
 ### Changed
 - PyO3 and numpy 0.23 → 0.29 (Python 3.14 support) (#22).
