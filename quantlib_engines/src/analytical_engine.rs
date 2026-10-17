@@ -147,25 +147,13 @@ impl AnalyticalEngine {
 
         let sigma = model.implied_volatility(forward, product.k, ttm)?;
         let discount = (-(model.r()) * ttm).exp();
+        // Shifted SABR is Black/Bachelier on F + s, K + s.
+        let (forward, strike) = (forward + model.shift(), product.k + model.shift());
 
         let unit_price = if model.beta().abs() < 1.0e-12 {
-            self.price_sabr_normal(
-                product.option_type,
-                forward,
-                product.k,
-                sigma,
-                discount,
-                ttm,
-            )
+            self.price_sabr_normal(product.option_type, forward, strike, sigma, discount, ttm)
         } else {
-            self.price_sabr_lognormal(
-                product.option_type,
-                forward,
-                product.k,
-                sigma,
-                discount,
-                ttm,
-            )
+            self.price_sabr_lognormal(product.option_type, forward, strike, sigma, discount, ttm)
         };
 
         Ok(unit_price)

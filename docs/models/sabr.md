@@ -67,7 +67,7 @@ At $K = F$ this reduces to the ATM formula (2.18) without a separate branch.
 
 1. `price_sabr` sets $\sigma$ to `implied_volatility(F, K, T)` and discounts with $e^{-rT}$.
 2. If `beta()` is below `1e-12` (Normal, or Shifted over Normal), the price is Bachelier: $C = e^{-rT}\big((F-K)N(d) + \sigma\sqrt T\,n(d)\big)$, with $d = (F-K)/(\sigma\sqrt T)$.
-3. Otherwise the price is Black-76 with $\sigma$ on the **unshifted** $F, K$. For a Shifted model over a lognormal or general base this is a bug (#48): the vol is a shifted-Black vol, but the price uses $F, K$, not $F+s, K+s$. Shifted over Normal is correct, because Bachelier is shift-invariant.
+3. Otherwise the price is Black-76 with $\sigma$. For a Shifted model both steps use $F+s, K+s$ (`shift()`, summed over nested shifts; 0 otherwise), since the vol is a shifted-Black vol (#48). Bachelier is shift-invariant, so the shift only matters there for conditioning.
 
 There are no FFT, COS, MC or binomial engines for SABR.
 
@@ -107,12 +107,12 @@ There are no FFT, COS, MC or binomial engines for SABR.
 | `calibrates_sabr_surface` | `quantlib_utils/src/calibration.rs` | recovery of $(\alpha, \rho, \nu)$ on a synthetic smile, β fixed at 0.6 by its bounds, 3e-2 |
 | `test_calibrate_sabr_surface` | `quantlib_py/tests/test_calibration_bindings.py` | Python binding |
 
-No test prices a Shifted SABR through `AnalyticalEngine`.
+`shifted_sabr_prices_black_on_shifted_forward_and_strike`, `shifted_sabr_prices_zero_forward_and_strike_with_put_call_parity` (same file) check Shifted pricing against Black-76 on $(F+s, K+s)$ to 1e-12, and parity at $F=0$ or $K=0$.
 
 ## Known limitations
 
 - Hagan 2002 asymptotics: negative density at low strikes or large $\nu^2T$, and reduced accuracy for β < 1 away from ATM. The Obłój (2008) correction, arbitrage-free PDE SABR and density diagnostics are pending (#20).
-- Bug #48: Shifted SABR pricing over a lognormal or general base uses unshifted $F, K$ in Black-76 (see Engines). It gives wrong prices, and NaN when $F$ or $K \le 0$.
+- `EuropeanOption` rejects negative $F$ and $K$, so Shifted SABR through the engine only reaches $F, K \ge 0$.
 - `implied_volatility` requires $F, K > 0$ even for Normal SABR, so negative rates need the Shifted wrapper.
 - No implied-vol inversion: market normal vols cannot be checked against prices (#19).
 - Flat `r` (#17). No Greeks (#18).
