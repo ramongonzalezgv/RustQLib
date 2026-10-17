@@ -45,3 +45,4 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - Stale cached prices for options differing only by valuation date or calendar (#28).
 - Heston MC bias when the Feller condition fails (#29).
 - Biased Heston control variate under full truncation; it is now applied only with QE (#30).
+- Heston control variate was ignored under full truncation, whose spot step is an exact martingale; it now applies under both schemes (#50).
