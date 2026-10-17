@@ -39,4 +39,4 @@ Python bindings changed: build with `maturin develop --release -m quantlib_py/Ca
 
 ## Process for non-trivial issues
 
-Write, review and test with independent agents: the reviewer and tester did not write the code and judge it only against the issue's acceptance criteria and this file.
+Write, review and test with independent agents: the reviewer and tester did not write the code and judge it only against the issue's acceptance criteria and this file. Use `/ship-issue N`: it picks a tier (trivial, normal, complex) and runs the full spec → blind tests → implement → review pipeline only for complex issues ([0019](docs/decisions/0019-tiered-agent-pipeline.md)).
