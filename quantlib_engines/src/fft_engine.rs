@@ -99,7 +99,8 @@ impl FFTEngine {
         let (nodes, factors) = (0..n)
             .map(|j| {
                 let x = j as f64 * dx;
-                // Carr–Madan Simpson weights (3 + (−1)^j − δ_{j0}) / 3.
+                // Carr–Madan Simpson weights, 0-indexed: 3 − (−1)^j − δ_{j0}
+                // = 1, 4, 2, 4, …, 2, 4 (divided by 3 below).
                 let (sign, simpson) = match j {
                     0 => (1.0, 1.0),
                     _ if j % 2 == 1 => (-1.0, 4.0),
@@ -153,7 +154,7 @@ impl FFTEngine {
         self.strip(model, spot, ttm, strikes, types)
     }
 
-    /// Lewis integral `∫ Re[e^{−iuk} φ(u − i/2)] / (u² + ¼) du` on the log-strike grid.
+    /// Lewis integral `∫ Re[e^{iuk} φ(u − i/2)] / (u² + ¼) du`, `k = ln(S/K)`, on the log-strike grid.
     fn integral_grid<M: FourierModel>(&self, model: &M, ttm: f64) -> Vec<f64> {
         let grid = &*self.grid;
         let fft = &grid.fft;

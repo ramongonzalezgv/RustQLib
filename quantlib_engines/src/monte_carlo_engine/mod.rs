@@ -1,4 +1,4 @@
-//! Monte Carlo pricing: one engine, one generic chunked driver ([`paths`]),
+//! Monte Carlo pricing: one engine, one generic chunked driver,
 //! streaming payoffs, per-chunk random streams and standard errors.
 
 mod core;

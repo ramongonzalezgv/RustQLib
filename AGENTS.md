@@ -14,12 +14,24 @@ AI-written code tends to be verbose, and verbose codebases are hard to maintain.
 - Error handling: validate once at construction; do not re-validate in hot paths.
 - Match the surrounding style; do not reformat unrelated code.
 
+## Documentation (same PR as the code)
+
+Docs are part of done. Write each kind when it cannot drift:
+
+- **Decision record** (`docs/decisions/NNNN-slug.md`): any PR that makes a design choice adds one: context, decision, alternatives rejected, consequences. Never edit an accepted record; supersede it with a new one and mark the old `Superseded by NNNN`.
+- **Model / engine page** (`docs/models/*.md`, `docs/engines/*.md`): any PR that changes a model's maths, discretisation, defaults or validation updates its page in the same PR.
+- **Changelog** (`CHANGELOG.md`, Keep a Changelog format): every user-visible change gets one line under `Unreleased`, with the issue/PR number.
+- **Rustdoc**: public items get a one-line doc; formulas and invariants go in the model page, linked from rustdoc.
+
+Docs follow the same rule as code: short, precise, no filler. State formulas, references (paper, equation number), what is validated by which test, and known limits. Reviewers treat missing or stale docs as a finding.
+
 ## Before declaring work done
 
 ```sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo bench --workspace --no-run
 ```
 
