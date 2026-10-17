@@ -34,7 +34,10 @@ class TestPythonBindingsParallelization(unittest.TestCase):
         cls.mkl_threads = os.environ.get("MKL_NUM_THREADS")
         cls.openblas_threads = os.environ.get("OPENBLAS_NUM_THREADS")
         cls.numexpr_threads = os.environ.get("NUMEXPR_NUM_THREADS")
-        cls.can_assert_speedup = cls.cpu_count >= 2 and cls.rayon_threads != "1"
+        # Shared CI runners are too noisy for wall-clock ratios; prices are still checked there.
+        cls.can_assert_speedup = (
+            cls.cpu_count >= 2 and cls.rayon_threads != "1" and not os.environ.get("CI")
+        )
 
         cls._print_section(
             "parallelization-tests environment",
