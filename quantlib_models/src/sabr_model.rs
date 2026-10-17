@@ -239,6 +239,14 @@ impl SabrModel {
         }
     }
 
+    /// Total displacement applied to F and K (0 for unshifted variants).
+    pub fn shift(&self) -> f64 {
+        match self {
+            Self::Shifted(model) => model.shift + model.base_model.shift(),
+            _ => 0.0,
+        }
+    }
+
     pub fn r(&self) -> f64 {
         match self {
             Self::General(model) => model.r,
