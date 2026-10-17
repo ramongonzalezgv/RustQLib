@@ -2,7 +2,7 @@ use core::f64::consts::PI;
 
 use num_complex::Complex64;
 use quantlib_core::{OptionType, PricingEngine, SimpleDate};
-use quantlib_engines::{AnalyticalEngine, FFTEngine, InterpolationKind};
+use quantlib_engines::{AnalyticalEngine, CosEngine, FFTEngine, InterpolationKind};
 use quantlib_models::{BlackScholesModel, HestonModel};
 use quantlib_products::EuropeanOption;
 
@@ -249,5 +249,51 @@ fn fft_heston_zero_vol_of_vol_matches_black_scholes_with_integrated_variance() {
                 "vol_of_vol={vol_of_vol}, K={strike}: heston={heston_price}, bs={bs_price}"
             );
         }
+    }
+}
+
+#[test]
+fn fft_and_cos_heston_zero_vol_of_vol_match_black_scholes_for_small_kappa() {
+    // #49: with sigma = 0 and v0 != theta, kappa -> 0 must give integrated variance v0 * T.
+    let valuation = SimpleDate::new(2026, 1, 1).expect("date");
+    let expiry = valuation.add_days(365);
+    let (theta, v0, r, q) = (0.09, 0.04, 0.03, 0.01);
+    let option = EuropeanOption::new_spot(
+        100.0,
+        100.0,
+        expiry,
+        Some(valuation),
+        OptionType::Call,
+        1,
+        None,
+    )
+    .expect("option");
+    let t = option.ttm();
+
+    for kappa in [0.0, 1e-12, 2.0] {
+        let heston = HestonModel::new(kappa, theta, 0.0, -0.5, v0, r, q).expect("model");
+        let decay = if kappa == 0.0 {
+            t
+        } else {
+            -(-kappa * t).exp_m1() / kappa
+        };
+        let avg_var = (theta * t + (v0 - theta) * decay) / t;
+        let bs = BlackScholesModel::new(avg_var.sqrt(), r, q).expect("bs model");
+        let expected = AnalyticalEngine.calculate_price(&option, &bs).expect("bs");
+
+        let fft = FFTEngine::default()
+            .calculate_price(&option, &heston)
+            .expect("fft");
+        let cos = CosEngine::default()
+            .calculate_price(&option, &heston)
+            .expect("cos");
+        assert!(
+            (fft - expected).abs() < 1e-8,
+            "kappa={kappa}: fft={fft}, bs={expected}"
+        );
+        assert!(
+            (cos - expected).abs() < 1e-8,
+            "kappa={kappa}: cos={cos}, bs={expected}"
+        );
     }
 }

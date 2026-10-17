@@ -89,9 +89,14 @@ impl HestonModel {
 
         // Handle near-deterministic vol-of-vol with the sigma -> 0 limit.
         if sigma_sq <= 1.0e-16 {
-            let integrated_variance = self.theta * ttm
-                + (self.v0 - self.theta) * (1.0 - (-self.kappa * ttm).exp())
-                    / self.kappa.max(1.0e-16);
+            // (1 - e^{-kT})/k -> T as k -> 0; the division is 0/0 there.
+            let kt = self.kappa * ttm;
+            let decay = if kt < 1.0e-8 {
+                ttm
+            } else {
+                -(-kt).exp_m1() / self.kappa
+            };
+            let integrated_variance = self.theta * ttm + (self.v0 - self.theta) * decay;
             let drift = (self.r - self.q) * ttm;
             return (i * u * drift - 0.5 * (u * u + i * u) * integrated_variance).exp();
         }
