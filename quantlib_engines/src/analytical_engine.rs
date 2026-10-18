@@ -1,7 +1,7 @@
 use quantlib_core::{OptionType, PricingEngine, QuantLibError, norm_cdf, norm_pdf};
 use quantlib_models::{BlackModel, BlackScholesModel, SabrModel};
 use quantlib_products::{
-    AmericanOption, AsianOption, AveragingType, DigitalOption, DigitalPayoffType, EuropeanOption,
+    AsianOption, AveragingType, DigitalOption, DigitalPayoffType, EuropeanOption,
 };
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -280,30 +280,6 @@ impl PricingEngine<DigitalOption, BlackModel> for AnalyticalEngine {
     }
 }
 
-impl PricingEngine<DigitalOption, SabrModel> for AnalyticalEngine {
-    fn calculate_price(
-        &self,
-        _product: &DigitalOption,
-        _model: &SabrModel,
-    ) -> Result<f64, QuantLibError> {
-        Err(QuantLibError::Engine(
-            "analytical engine does not support DigitalOption under SABRModel".to_owned(),
-        ))
-    }
-}
-
-impl PricingEngine<AmericanOption, BlackScholesModel> for AnalyticalEngine {
-    fn calculate_price(
-        &self,
-        _product: &AmericanOption,
-        _model: &BlackScholesModel,
-    ) -> Result<f64, QuantLibError> {
-        Err(QuantLibError::Engine(
-            "analytical engine does not support AmericanOption under BlackScholesModel".to_owned(),
-        ))
-    }
-}
-
 /// Geometric-average Asian under Black–Scholes (Kemna & Vorst 1990), for a
 /// unit quantity.
 ///
@@ -372,61 +348,11 @@ impl PricingEngine<AsianOption, BlackScholesModel> for AnalyticalEngine {
     }
 }
 
-impl PricingEngine<AmericanOption, BlackModel> for AnalyticalEngine {
-    fn calculate_price(
-        &self,
-        _product: &AmericanOption,
-        _model: &BlackModel,
-    ) -> Result<f64, QuantLibError> {
-        Err(QuantLibError::Engine(
-            "analytical engine does not support AmericanOption under BlackModel".to_owned(),
-        ))
-    }
-}
-
-impl PricingEngine<AsianOption, BlackModel> for AnalyticalEngine {
-    fn calculate_price(
-        &self,
-        _product: &AsianOption,
-        _model: &BlackModel,
-    ) -> Result<f64, QuantLibError> {
-        Err(QuantLibError::Engine(
-            "analytical engine does not support AsianOption under BlackModel".to_owned(),
-        ))
-    }
-}
-
-impl PricingEngine<AmericanOption, SabrModel> for AnalyticalEngine {
-    fn calculate_price(
-        &self,
-        _product: &AmericanOption,
-        _model: &SabrModel,
-    ) -> Result<f64, QuantLibError> {
-        Err(QuantLibError::Engine(
-            "analytical engine does not support AmericanOption under SABRModel".to_owned(),
-        ))
-    }
-}
-
-impl PricingEngine<AsianOption, SabrModel> for AnalyticalEngine {
-    fn calculate_price(
-        &self,
-        _product: &AsianOption,
-        _model: &SabrModel,
-    ) -> Result<f64, QuantLibError> {
-        Err(QuantLibError::Engine(
-            "analytical engine does not support AsianOption under SABRModel".to_owned(),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use quantlib_core::{OptionType, PricingEngine, SimpleDate};
     use quantlib_models::{BlackModel, BlackScholesModel, SabrModel};
-    use quantlib_products::{
-        AmericanOption, AsianOption, AveragingType, DigitalOption, DigitalPayoffType,
-    };
+    use quantlib_products::{AsianOption, AveragingType, DigitalOption, DigitalPayoffType};
 
     use quantlib_core::norm_cdf;
 
@@ -525,30 +451,6 @@ mod tests {
             .calculate_price(&option, &model)
             .expect("SABR analytical price");
         assert!(price.is_finite() && price > 0.0);
-    }
-
-    #[test]
-    fn analytical_engine_rejects_american_option() {
-        let option = AmericanOption::new_spot(
-            100.0,
-            100.0,
-            SimpleDate::new(2027, 2, 10).expect("date"),
-            Some(SimpleDate::new(2026, 2, 10).expect("date")),
-            OptionType::Call,
-            1,
-            None,
-        )
-        .expect("valid product");
-        let model = BlackScholesModel::new(0.2, 0.01, 0.0).expect("valid model");
-        let engine = AnalyticalEngine;
-
-        let err = engine
-            .calculate_price(&option, &model)
-            .expect_err("must reject");
-        assert!(
-            err.to_string().contains("does not support AmericanOption"),
-            "unexpected error: {err}"
-        );
     }
 
     #[test]
