@@ -37,6 +37,7 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 - `OptionValuationContext`, `make_cache_key`, `SimpleLruCache`, `StochasticModel`, `FinancialProduct::get_parameters` (#28).
 - Heston variance-absorption Euler scheme (#29).
 - `MonteCarloEuropeanEngine`, `MonteCarloAsianEngine`, `MonteCarloDigitalEngine`; `PricingEngine<AmericanOption, _>` stubs on `MonteCarloEngine` (#30).
+- `AnalyticalEngine` stubs that returned "does not support" (American under BS/Black/SABR, Asian under Black/SABR, digital under SABR); these pairs are now compile errors (#57).
 
 ### Fixed
 - Binomial cache returned the European price for the matching American option (#22).

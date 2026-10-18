@@ -18,6 +18,7 @@ rand_xoshiro = "0.7"
 [dev-dependencies]
 criterion = "0.5"
 proptest = "1"
+static_assertions = "1.1"
 
 [[bench]]
 name = "fft_bench"
